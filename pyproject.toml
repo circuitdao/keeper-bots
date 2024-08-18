@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "keeper-bots"
+version = "0.1.0"
+description = "Keeper bots for Circuit protocol"
+authors = ["CircuitDAO"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "keeper_bots"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+httpx = {extras = ["http2"], version = "^0.27.0"}
+python-dotenv = "^1.0.0"
+autobahn = "^23.6.2"
+python-okx-async = "0.1.1"
+chia-blockchain = "^2.4.2"
+service-identity = "^24.1.0"
+circuit-cli = {path = "../circuit-cli", develop = true}
+
+[[tool.poetry.source]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
