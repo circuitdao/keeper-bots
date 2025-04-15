@@ -74,8 +74,13 @@ async def run_announcer():
     cnt = 0 # Counter to artificially reduce oracle price over time for testing purposes
     while True:
 
+        # Check if there are any bills that have been enacted (ie veto period has and implemetation period has not ended yet)
+        # TODO
+        #rpc_client.upkeep_bills_list()
+
+        # Show announcer
         try:
-            data = await rpc_client.announcer_list()
+            data = await rpc_client.announcer_show()
         except httpx.ReadTimeout as err:
             print("Failed to get announcer list due to ReadTimeout", err)
             await asyncio.sleep(10)
@@ -85,9 +90,11 @@ async def run_announcer():
             await asyncio.sleep(10)
             continue
 
-        if len(data) == 0:
-            raise ValueError("No announcers found")
-        coin_name = [x for x in data if x["is_approved"]][0]["name"]
+        assert len(data) > 0, "No announcer found"
+        coin_names = [x for x in data if x["is_approved"]]
+        assert len(coin_names) > 0, "No approved announcer found"
+        assert len(coin_names) < 2, "More than one approved announcer found"
+        coin_name = coin_names[0]["name"]
 
         # Get latest volume-weighted XCH/USD price
         try:
@@ -105,24 +112,24 @@ async def run_announcer():
         price = int(PRICE_PRECISION * price)
         cnt += 1
 
-        # Mutate announcer
-        print("Mutating announcer", coin_name, "to set price to", price)
+        # Updating announcer
+        print("Updating announcer", coin_name, "to set price to", price)
         try:
-            data = await rpc_client.announcer_mutate(coin_name, price=price)
+            data = await rpc_client.announcer_update(price, COIN_NAME=coin_name)
         except httpx.ReadTimeout as err:
-            print("Failed to mutate announcer due to ReadTimeout", err)
+            print("Failed to update announcer due to ReadTimeout", err)
             await asyncio.sleep(60)
             continue
         except ValueError as err:
-            print("Failed to mutate announcer due to ValueError", err)
+            print("Failed to update announcer due to ValueError", err)
             await asyncio.sleep(10)
             continue
         except Exception as err:
-            print("Failed to mutate announcer", err)
+            print("Failed to update announcer", err)
             await asyncio.sleep(10)
             continue
 
-        print("Got back data", data)
+        #print("Got back data", data)
 
         final_bundle: SpendBundle = SpendBundle.from_json_dict(data["bundle"])
         coin_name = final_bundle.additions()[0].name().hex()
@@ -132,7 +139,7 @@ async def run_announcer():
             print("Waiting for confirmation...")
             await rpc_client.wait_for_confirmation(final_bundle)
         except ValueError as err:
-            print("Announcer mutate transaction failed")
+            print("Announcer update transaction failed")
             await asyncio.sleep(10)
             continue
 
@@ -141,7 +148,7 @@ async def run_announcer():
         print("All new coins:", [coin.name().hex() for coin in final_bundle.additions()])
 
         # Try to update oracle
-        await rpc_client.upkeep_sync()
+        await rpc_client.upkeep_rpc_sync()
         print("Updating oracle")
         try:
             data = await rpc_client.oracle_update()

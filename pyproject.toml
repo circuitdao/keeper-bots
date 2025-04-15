@@ -8,14 +8,17 @@ readme = "README.md"
 packages = [{include = "keeper_bots"}]
 
 [tool.poetry.dependencies]
-python = "^3.12"
+#python = "^3.12"
+python = "~3.11"
 httpx = {extras = ["http2"], version = "^0.27.0"}
 python-dotenv = "^1.0.0"
 autobahn = "^23.6.2"
 python-okx-async = "0.1.1"
-chia-blockchain = "^2.4.2"
+#chia-blockchain = "^2.4.2"
+chia-blockchain = "^2.5.3"
 service-identity = "^24.1.0"
 circuit-cli = {path = "../circuit-cli", develop = true}
+coinbase-advanced-py = "^1.8.2"
 
 [[tool.poetry.source]]
 name = "testpypi"

@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 #from coinbase.websocket import WSClient
 from okx_async.websocket.WsPublic import WsPublic
 
-from circuit_cli.coinbase_feed import CoinbaseFeed
+#from circuit_cli.coinbase_feed import CoinbaseFeed
+from coinbase_feed import CoinbaseFeed
 
 
 # OKX price feed
