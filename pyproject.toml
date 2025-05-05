@@ -19,6 +19,7 @@ chia-blockchain = "^2.5.3"
 service-identity = "^24.1.0"
 circuit-cli = {path = "../circuit-cli", develop = true}
 coinbase-advanced-py = "^1.8.2"
+python-json-logger = "^3.3.0"
 
 [[tool.poetry.source]]
 name = "testpypi"

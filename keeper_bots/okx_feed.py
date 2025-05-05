@@ -38,7 +38,8 @@ class OkxFeed:
 
     # Connect to websocket
     def connect(self):
-        self.ws = WsPublic(url="wss://wsaws.okx.com:8443/ws/v5/public")
+        self.ws = WsPublic(url="wss://ws.okx.com:8443/ws/v5/public")
+        #self.ws = WsPublic(url="wss://wspap.okx.com:8443/ws/v5/public")
         self.ws.start()
 
     # Subscribe to websocket channel
