@@ -2125,10 +2125,8 @@ description = "Python SDK with async support for the OKX v5 API"
 optional = false
 python-versions = "*"
 groups = ["main"]
-files = [
-    {file = "python-okx-async-0.1.1.tar.gz", hash = "sha256:377997c3c385e87f5e46978592c8a022d20feec06d7ad728f290dda41fded1dc"},
-    {file = "python_okx_async-0.1.1-py3-none-any.whl", hash = "sha256:eedc2b623bf6d64b823057f0e82397d5a30701cf225c6afde1b3cf5d98b22fde"},
-]
+files = []
+develop = true
 
 [package.dependencies]
 httpx = {version = "*", extras = ["http2"]}
@@ -2137,6 +2135,10 @@ keyring = "*"
 pyOpenSSL = "*"
 requests = "*"
 Twisted = "*"
+
+[package.source]
+type = "directory"
+url = "../python-okx-async"
 
 [[package]]
 name = "pywin32"
@@ -3022,4 +3024,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "~3.11"
-content-hash = "709d246f332d6f6a600ec8e96db5e356fabc74a20349ef6f02065b05d6ed7027"
+content-hash = "4a0a3cfe958ce9ae038c30ed2e2c89ec1b2469477b5f826c4f3153f87b76736e"

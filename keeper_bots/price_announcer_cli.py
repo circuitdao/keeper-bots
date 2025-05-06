@@ -7,6 +7,7 @@ import math
 import httpx
 import yaml
 import logging.config
+from datetime import datetime
 
 from chia.types.spend_bundle import SpendBundle
 
@@ -58,19 +59,28 @@ async def fetch_gateio_price():
 
 
 async def run_announcer():
-    parser = argparse.ArgumentParser(description="Circuit reference price announcer CLI tool")
+    parser = argparse.ArgumentParser(description="Circuit reference announcer bot")
     parser.add_argument(
-        "--base-url",
+        "--rpc-url",
         type=str,
         help="Base URL for the Circuit RPC API server",
         default="http://localhost:8000",
     )
+    parser.add_argument(
+        "--okx-url",
+        type=str,
+        help="Base URL of the OKX API",
+        default="wss://ws.okx.com:8443/ws/v5/public",
+    )
     parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
     parser.add_argument(
-        "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
+        "--private-key", "-p",
+        type=str,
+        help="Private key for your coins",
+        default=os.environ.get("PRIVATE_KEY"),
     )
     args = parser.parse_args()
-    rpc_client = CircuitRPCClient(args.base_url, args.private_key)
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
 
     # Connect to OKX price feed
     sym = "XCH-USDT"
@@ -81,10 +91,27 @@ async def run_announcer():
     if startup_window_length > window_length:
         raise ValueError("Start-up window must not be longer than full window")
 
-    okx_feed = OkxFeed(sym, uquote, startup_window_length, window_length, verbose=False)
+    okx_feed = OkxFeed(sym, uquote, args.okx_url, startup_window_length=startup_window_length, window_length=window_length, verbose=False)
 
-    okx_feed.connect()
-    okx_feed.subscribe()
+    try:
+        log.info("Connecting and subscribing to OKX feed", extra={
+            "symbol": sym,
+            "uquote": uquote,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        })
+        await okx_feed.connect()
+        await okx_feed.subscribe()
+        log.info("Connected and subscribed to OKX feed", extra={
+            "symbol": sym,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        })
+        await okx_feed.consume()
+    except Exception as e:
+        log.error("Connecting and subscribing to OKX feed failed", extra={
+            "error_message": str(e),
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        })
+        raise
 
     configure_last_checked_timestamp = 0
     cnt = 0 # Counter to artificially reduce oracle price over time for testing purposes
@@ -240,7 +267,7 @@ async def run_announcer():
                             "required_xch_balance": req_xch_balance,
                             "required_xch_balance_delta": req_xch_balance - xch_balance,
                         }
-                        logger.error("Failed to configure announcer", extra=json_msg)
+                        log.error("Failed to configure announcer", extra=json_msg)
                         break
 
             # update new_price_ttl

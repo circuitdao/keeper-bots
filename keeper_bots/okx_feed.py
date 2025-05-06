@@ -1,25 +1,25 @@
-#import os
-#import json
 import asyncio
 import aiofiles
 from collections import deque
 import math
+import json
 from datetime import datetime, timedelta
-#from dotenv import load_dotenv
-#from pprint import pprint
 
-#from coinbase.websocket import WSClient
-from okx_async.websocket.WsPublic import WsPublic
+from okx_async.websocket.WsPublicAsync import WsPublicAsync
 
-#from circuit_cli.coinbase_feed import CoinbaseFeed
 from coinbase_feed import CoinbaseFeed
-
 
 # OKX price feed
 # Keeps track of the volume-weighted average price based on trades on OKX
-class OkxFeed:
+class OkxFeed(WsPublicAsync):
 
-    def __init__(self, sym, uquote, startup_window_length=900, window_length=3600, verbose=False):
+    def __init__(self, sym, uquote, url,
+            startup_window_length=900,
+            window_length=3600,
+            verbose=False
+    ):
+        print(f"Setting url on super class: {url}")
+        super().__init__(url)
         self.sym = sym
         assert len(self.bq()) == 2, "Symbol not valid. Must be of form <base>-<quote>"
         self.uquote = uquote
@@ -29,22 +29,20 @@ class OkxFeed:
         self.feed = deque() # List of [price, size] pairs
         self.price = float("NaN")
         self.size = 0
-        self.ws = None
+        #self.ws = None
         self.verbose = verbose
         self.coinbase_feed = CoinbaseFeed(self.bq()[1], uquote)
 
+    # Wrap base class subscribe function
+    async def subscribe(self):
+        await super().subscribe([{"channel": "trades", "instId": self.sym}], self.__call__)
+
+    # Wrap base class unsubscribe function
+    async def unsubscribe(self):
+        await super().unsubscribe([{"channel": "trades", "instId": self.sym}], self.__call__)
+
     def bq(self):
         return self.sym.split("-")
-
-    # Connect to websocket
-    def connect(self):
-        self.ws = WsPublic(url="wss://ws.okx.com:8443/ws/v5/public")
-        #self.ws = WsPublic(url="wss://wspap.okx.com:8443/ws/v5/public")
-        self.ws.start()
-
-    # Subscribe to websocket channel
-    def subscribe(self):
-        self.ws.subscribe([{"channel": "trades", "instId": self.sym}], self)
 
     def recalculate_on_append(self, append_trade):
         if math.isnan(self.price):
@@ -74,8 +72,9 @@ class OkxFeed:
 
     # Websocket callback function
     # Updates the price whenever a new trade is received
-    def __call__(self, message):
-        #print("publicCallback", message)
+    def __call__(self, msg):
+        print("publicCallback", msg)
+        message = json.loads(msg)
         if "event" in message:
             if message["event"] == "subscribe":
                 # Initialise feed data
@@ -163,3 +162,24 @@ class OkxFeed:
                 await f.write(f'{now.strftime("%Y-%m-%d %H:%M:%S")}: \
                 {str(self.price)} {self.sym} \
                 (volume [{base}]: {self.size})')
+
+
+
+
+
+## Connect to websocket
+#async def connect(self):
+#    #self.ws = WsPublic(url="wss://ws.okx.com:8443/ws/v5/public")
+#    self.ws = WsPublicAsync(url="wss://ws.okx.com:8443/ws/v5/public")
+#    #self.ws = WsPublic(url="wss://wspap.okx.com:8443/ws/v5/public")
+#    #self.ws.start()
+#    await self.ws.start()
+#    print("Connected")
+#
+## Subscribe to websocket channel
+#async def subscribe(self):
+#    #self.ws.subscribe([{"channel": "trades", "instId": self.sym}], self)
+#    #await self.ws.subscribe([{"channel": "trades", "instId": self.sym}], self)
+#    #{"channel": "tickers", "instId": "ETH-USDT"}
+#    await self.ws.subscribe([{"channel": "tickers", "instId": "ETH-USDT"}], publicCallback) #self)
+#    print("Subscribed")
