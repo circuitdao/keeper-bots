@@ -4,10 +4,17 @@ formatters:
   default:
     format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   access:
-    format: '[%(asctime)s] %(levelname)s [%(name)s:%(lineno)d] %(message)s'
+    format: '[%(asctime)s] %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
   json:
     "()": pythonjsonlogger.jsonlogger.JsonFormatter
     format: '%(asctime)s %(name)s %(levelname)s %(message)s %(pathname)s %(lineno)d'
+filters:
+  error_and_above:
+    "()": logging_filters.LevelFilter
+    min_level: ERROR
+  warn_and_below:
+    "()": logging_filters.LevelFilter
+    max_level: WARNING
 handlers:
   default:
     formatter: default
@@ -17,11 +24,15 @@ handlers:
     formatter: access
     class: logging.StreamHandler
     stream: ext://sys.stdout
+    filters:
+      - warn_and_below
   json:
     formatter: json
     class: logging.StreamHandler
     stream: ext://sys.stderr
     level: ERROR
+    filters:
+      - error_and_above
 loggers:
   sqlalchemy:
     level: ERROR
@@ -48,13 +59,14 @@ loggers:
     handlers:
       - access
     propagate: no
-  __main__:
+  announcer_configure_bot:
     level: INFO
     handlers:
       - json
+      - access
     propagate: no
 root:
-  level: ERROR
+  level: INFO
   handlers:
     - access
   propagate: yes
