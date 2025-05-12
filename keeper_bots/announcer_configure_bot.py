@@ -281,8 +281,8 @@ async def run_announcer():
             coin_name = final_bundle.additions()[0].name().hex()
             log.info("New announcer coin: %s", coin_name)
             log.info("All new coins: %s", [coin.name().hex() for coin in final_bundle.additions()])
-            # Log state of configure announcer
-            # show announcer
+
+            # log state of configured announcer
             try:
                 announcers = await rpc_client.announcer_show()
             except httpx.ReadTimeout as err:
@@ -311,7 +311,11 @@ async def run_announcer():
                 new_announcer["price_ttl"],
             )
         else:
-            log.info("Leaving announcer configuration unchanged. MIN_DEPOSIT=%s  VALUE_TTL=%s", announcer['min_deposit'], announcer['price_ttl'])
+            log.info(
+                "Leaving announcer configuration unchanged. MIN_DEPOSIT=%s  VALUE_TTL=%s",
+                announcer['min_deposit'],
+                announcer['price_ttl']
+            )
 
         # sleep until next run
         log.info("Sleeping for %s seconds", RUN_INTERVAL)

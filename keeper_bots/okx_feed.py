@@ -3,11 +3,14 @@ import aiofiles
 from collections import deque
 import math
 import json
+import logging.config
 from datetime import datetime, timedelta
 
 from okx_async.websocket.WsPublicAsync import WsPublicAsync
 
 from coinbase_feed import CoinbaseFeed
+
+log = logging.getLogger(__name__)
 
 # OKX price feed
 # Keeps track of the volume-weighted average price based on trades on OKX
@@ -18,7 +21,7 @@ class OkxFeed(WsPublicAsync):
             window_length=3600,
             verbose=False
     ):
-        print(f"Setting url on super class: {url}")
+        #print(f"Setting url on super class: {url}")
         super().__init__(url)
         self.sym = sym
         assert len(self.bq()) == 2, "Symbol not valid. Must be of form <base>-<quote>"
@@ -73,17 +76,17 @@ class OkxFeed(WsPublicAsync):
     # Websocket callback function
     # Updates the price whenever a new trade is received
     def __call__(self, msg):
-        print("publicCallback", msg)
+        #print("publicCallback", msg)
         message = json.loads(msg)
         if "event" in message:
             if message["event"] == "subscribe":
                 # Initialise feed data
                 self.starttime = datetime.utcnow()
-                print(f"Subscribed to {self.sym} spot trades on OKX")
-                print(f"  Price calculation window length")
-                print(f"    on start-up: {int(self.startup_window_length.total_seconds())}s")
-                print(f"    post ramp-up: {int(self.window_length.total_seconds())}s")
-                print(f'  Start time (UTC): {self.starttime.strftime("%Y-%m-%d %H:%M:%S")}')
+                log.info("Subscribed to %s spot trades on OKX", self.sym)
+                log.info("  Price calculation window length")
+                log.info("    on start-up: %ss", int(self.startup_window_length.total_seconds()))
+                log.info("    post ramp-up: %ss", int(self.window_length.total_seconds()))
+                log.info("  Start time (UTC): %s", self.starttime.strftime("%Y-%m-%d %H:%M:%S"))
             else:
                 raise ValueError(f'Unknown event {message["event"]} returned in callback')
         elif "error" in message:
@@ -101,14 +104,14 @@ class OkxFeed(WsPublicAsync):
 
                     old_trade = self.feed.popleft()
                     num_popped += 1
-                    if self.verbose: print(f"Popped: {old_trade}")
+                    if self.verbose: log.info("Popped: %s", old_trade)
 
                     if not self.feed:
                         break
 
                 # Print new price
                 if num_popped > 0:
-                    print(f"  New price: {self.price}   (volume: {sum([d[1] for d in self.feed])})")
+                    log.info("New price: %.4f   (volume: %s)", self.price, sum([d[1] for d in self.feed]))
 
             # Add new trades
             for i in range(len(message["data"])):
@@ -121,19 +124,19 @@ class OkxFeed(WsPublicAsync):
                     price = okx_price
 
                 if self.verbose:
-                    print("Prices:")
-                    print(f"  {okx_price} {self.sym} (OKX)")
+                    log.info("Prices:")
+                    log.info("  %s %s (OKX)", okx_price, self.sym)
                     if self.coinbase_feed.client is not None:
-                        print(f"  {self.coinbase_feed.price} {self.coinbase_feed.sym} (Coinbase)")
-                        print(f"  {price} {self.bq()[0]}-{self.uquote} (OKX & Coinbase)")
-                    print()
+                        log.info("  %s %s (Coinbase)", self.coinbase_feed.price, self.coinbase_feed.sym)
+                        log.info("  %s %s-%s (OKX & Coinbase)", price, self.bq()[0], self.uquote)
+                    log.info("")
 
                 new_trade = [price, float(message["data"][i]["sz"]), datetime.utcfromtimestamp(int(message["data"][i]["ts"][:-3]))]
                 self.recalculate_on_append(new_trade)
 
                 # Append price and size from trade to feed
                 self.feed.append(new_trade)
-                if self.verbose: print(f"Appended: {new_trade}")
+                if self.verbose: log.info("Appended: %s", new_trade)
 
             # Print new price
             if datetime.utcnow() - self.startup_window_length > self.starttime:
@@ -141,45 +144,24 @@ class OkxFeed(WsPublicAsync):
                     ramp_up = " [ramp-up]"
                 else:
                     ramp_up = ""
-                print(f"  New price{ramp_up}: {self.price}   (volume: {sum([d[1] for d in self.feed])})")
+                log.info("New price%s: %.4f   (volume: %s)", ramp_up, self.price, sum([d[1] for d in self.feed]))
             else:
-                if self.verbose: print(f"  No price yet. Still in start-up window")
+                if self.verbose: log.info("  No price yet. Still in start-up window")
 
         else:
-            print("WARNING: Dropping trade(s) as we haven't initialised our feed data yet")
-            print(f"  {message}")
+            log.info("Dropping trade(s) as feed data not initialized yet")
+            log.info("  %s", message)
 
     async def get_price(self):
-        print(f"PRICE: {self.price}")
+        #log.info("PRICE: %.4f", self.price)
         return self.price
 
     # Save price to text file
     async def save_price(self, save_frequency):
         now = datetime.utcnow()
         if now > self.starttime + self.window_length and self.starttime > datetime.utcfromtimestamp(0):
-            if self.verbose: print("Writing price to file")
+            if self.verbose: log.info("Writing price to file")
             async with aiofiles.open("okx_price.txt", "w") as f:
                 await f.write(f'{now.strftime("%Y-%m-%d %H:%M:%S")}: \
                 {str(self.price)} {self.sym} \
                 (volume [{base}]: {self.size})')
-
-
-
-
-
-## Connect to websocket
-#async def connect(self):
-#    #self.ws = WsPublic(url="wss://ws.okx.com:8443/ws/v5/public")
-#    self.ws = WsPublicAsync(url="wss://ws.okx.com:8443/ws/v5/public")
-#    #self.ws = WsPublic(url="wss://wspap.okx.com:8443/ws/v5/public")
-#    #self.ws.start()
-#    await self.ws.start()
-#    print("Connected")
-#
-## Subscribe to websocket channel
-#async def subscribe(self):
-#    #self.ws.subscribe([{"channel": "trades", "instId": self.sym}], self)
-#    #await self.ws.subscribe([{"channel": "trades", "instId": self.sym}], self)
-#    #{"channel": "tickers", "instId": "ETH-USDT"}
-#    await self.ws.subscribe([{"channel": "tickers", "instId": "ETH-USDT"}], publicCallback) #self)
-#    print("Subscribed")
