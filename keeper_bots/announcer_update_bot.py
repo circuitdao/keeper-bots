@@ -68,7 +68,7 @@ async def run_announcer():
     args = parser.parse_args()
 
     if not args.private_key:
-        raise ValueError("Must provide private key for announcer")
+        raise ValueError("No private key provided")
 
     rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
 
@@ -81,135 +81,118 @@ async def run_announcer():
     if startup_window_length > window_length:
         raise ValueError("Start-up window must not be longer than averaging window")
 
-    okx_feed = OkxFeed(sym, uquote, args.okx_url, startup_window_length=startup_window_length, window_length=window_length, verbose=False)
+    feed = OkxFeed(sym, uquote, args.okx_url, startup_window_length=startup_window_length, window_length=window_length, verbose=False)
 
-    try:
-        log.info("Starting and subscribing to OKX feed", extra={
-            "symbol": sym,
-            "uquote": uquote,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        })
-        await okx_feed.start()
-        await okx_feed.subscribe()
-        log.info("Started and subscribed to OKX feed", extra={
-            "symbol": sym,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        })
-    except Exception as e:
-        log.error("Failed to connect and subscribe to OKX feed", extra={
-            "error_message": str(e),
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        })
-        raise
+    async with feed as okx_feed:
 
-    cnt = 0 # Counter to artificially reduce oracle price over time for testing purposes
-    while True:
+        cnt = 0 # Counter to artificially reduce oracle price over time for testing purposes
 
-        # show announcer
-        try:
-            announcers = await rpc_client.announcer_show()
-        except httpx.ReadTimeout as err:
-            log.error("Failed to show announcer due to ReadTimeout: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        except Exception as err:
-            log.error("Failed to show announcer: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
+        while True:
 
-        #print(f"{announcers=}")
-        if len(announcers) < 1:
-            log.error("No announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        approved_announcers = [x for x in announcers if x["approved"]]
-        if len(approved_announcers) < 1:
-            log.warning("No approved announcer found")
-            if len(announcers) > 1:
-                log.error("More than one unapproved announcer found")
-            announcer = announcers[0]
-            log.info("Found an unapproved announcer. Name: %s  LauncherID: %s", announcer['name'], announcer['launcher_id'])
-        else:
-            if len(approved_announcers) > 1:
-                log.error("More than one approved announcer found")
-            announcer = approved_announcers[0]
-            log.info("Found an approved announcer. Name: %s  LauncherID: %s", announcer['name'], announcer['launcher_id'])
+            # show announcer
+            try:
+                announcers = await rpc_client.announcer_show()
+            except httpx.ReadTimeout as err:
+                log.error("Failed to show announcer due to ReadTimeout: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
+            except Exception as err:
+                log.error("Failed to show announcer: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
-
-        # get latest volume-weighted XCH/USD price
-        try:
-            price = await okx_feed.get_price()
-        except Exception as err: #(TypeError, ValueError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError):
-            log.error("Failed to fetch latest price:", err)
-            price = announcer["price"] # if failed to get price from feed, re-publish announcer price to prevent expiry
-            log.info("Using existing price: %.2f", price/PRICE_PRECISION)
-        else:
-            if math.isnan(price):
-                price = announcer["price"] # if still ramping up, re-publish announcer price to prevent expiry
-                log.info("Still ramping up, using existing price: %.2f", price/PRICE_PRECISION)
+            #print(f"{announcers=}")
+            if len(announcers) < 1:
+                log.error("No announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
+            approved_announcers = [x for x in announcers if x["approved"]]
+            if len(approved_announcers) < 1:
+                log.warning("No approved announcer found")
+                if len(announcers) > 1:
+                    log.error("More than one unapproved announcer found")
+                announcer = announcers[0]
+                log.info("Found an unapproved announcer. Name: %s  LauncherID: %s", announcer['name'], announcer['launcher_id'])
             else:
-                #price = int(PRICE_PRECISION * price * 0.99**cnt) # reduce oralce price by 1% per iteration #random.randint(10000, 12000)  # await fetch_okx_price()
-                price = int(PRICE_PRECISION * price)
-                log.info("Fetched latest price: %.2f", price/PRICE_PRECISION)
-                cnt += 1
+                if len(approved_announcers) > 1:
+                    log.error("More than one approved announcer found")
+                announcer = approved_announcers[0]
+                log.info("Found an approved announcer. Name: %s  LauncherID: %s", announcer['name'], announcer['launcher_id'])
 
-        # update announcer price
+            # get latest volume-weighted XCH/USD price
+            try:
+                price = await okx_feed.get_price()
+            except Exception as err: #(TypeError, ValueError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError):
+                log.error("Failed to fetch latest price:", err)
+                price = announcer["price"] # if failed to get price from feed, re-publish announcer price to prevent expiry
+                log.info("Using existing price: %.2f", price/PRICE_PRECISION)
+            else:
+                if math.isnan(price):
+                    price = announcer["price"] # if still ramping up, re-publish announcer price to prevent expiry
+                    log.info("Still ramping up, using existing price: %.2f", price/PRICE_PRECISION)
+                else:
+                    #price = int(PRICE_PRECISION * price * 0.99**cnt) # reduce oralce price by 1% per iteration #random.randint(10000, 12000)  # await fetch_okx_price()
+                    price = int(PRICE_PRECISION * price)
+                    log.info("Fetched latest price: %.2f", price/PRICE_PRECISION)
+                    cnt += 1
 
-        if price < 0:
-            json_msg = {
-                "error_message": "XCH/USD market price is negative",
-                "announcer_price": announcer["price"],
-                "market_price": price,
-            }
-            log.error("Failed to update announcer price", extra=json_msg)
-        elif price == 0:
-            json_msg = {
-                "warning_message": "XCH/USD market price is 0",
-                "announcer_price": announcer["price"],
-                "market_price": price,
-            }
-            log.warning("XCH/USD market price is 0", extra=json_msg)
-        elif abs(announcer["price"]/price - 1) <= PRICE_UPDATE_THRESHOLD_BPS/10000.0:
-            #json_msg = {
-            #    "info_message": "Price update threshold not exceeded",
-            #    "announcer_price": announcer["price"],
-            #    "market_price": price,
-            #    "PRICE_UPDATE_THRESHOLD_BPS": PRICE_UPDATE_THRESHOLD_BPS,
-            #}
-            #log.info("Not updating announcer", extra=json_msg)
-            log.info("Not updating announcer. Price update threshold not reached")
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
+            # update announcer price
 
-        log.info("Updating announcer. Setting price to %.2f", price/PRICE_PRECISION)
+            if price < 0:
+                json_msg = {
+                    "error_message": "XCH/USD market price is negative",
+                    "announcer_price": announcer["price"],
+                    "market_price": price,
+                }
+                log.error("Failed to update announcer price", extra=json_msg)
+            elif price == 0:
+                json_msg = {
+                    "warning_message": "XCH/USD market price is 0",
+                    "announcer_price": announcer["price"],
+                    "market_price": price,
+                }
+                log.warning("XCH/USD market price is 0", extra=json_msg)
+            elif abs(announcer["price"]/price - 1) <= PRICE_UPDATE_THRESHOLD_BPS/10000.0:
+                #json_msg = {
+                #    "info_message": "Price update threshold not exceeded",
+                #    "announcer_price": announcer["price"],
+                #    "market_price": price,
+                #    "PRICE_UPDATE_THRESHOLD_BPS": PRICE_UPDATE_THRESHOLD_BPS,
+                #}
+                #log.info("Not updating announcer", extra=json_msg)
+                log.info("Not updating announcer. Price update threshold not reached")
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
-        try:
-            response = await rpc_client.announcer_update(price, COIN_NAME=announcer["name"])
-            #print(f"Announcer update tx broadcast status: {response['status']}")
-        except httpx.ReadTimeout as err:
-            log.error("Failed to update announcer due to ReadTimeout: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        except ValueError as err:
-            log.error("Failed to update announcer due to ValueError: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        except Exception as err:
-            log.error("Failed to update announcer: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
+            log.info("Updating announcer. Setting price to %.2f", price/PRICE_PRECISION)
 
-        log.info("Updated announcer. Price set to %.2f", price/PRICE_PRECISION)
+            try:
+                response = await rpc_client.announcer_update(price, COIN_NAME=announcer["name"])
+                #print(f"Announcer update tx broadcast status: {response['status']}")
+            except httpx.ReadTimeout as err:
+                log.error("Failed to update announcer due to ReadTimeout: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
+            except ValueError as err:
+                log.error("Failed to update announcer due to ValueError: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
+            except Exception as err:
+                log.error("Failed to update announcer: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
-        final_bundle: SpendBundle = SpendBundle.from_json_dict(response["bundle"])
-        coin_name = final_bundle.additions()[0].name().hex()
+            log.info("Updated announcer. Price set to %.2f", price/PRICE_PRECISION)
 
-        log.info("New announcer coin: %s", coin_name)
-        log.info("All new coins: %s", [coin.name().hex() for coin in final_bundle.additions()])
+            final_bundle: SpendBundle = SpendBundle.from_json_dict(response["bundle"])
+            coin_name = final_bundle.additions()[0].name().hex()
 
-        # sleep until next run
-        log.info("Sleeping for %s seconds", RUN_INTERVAL)
-        await asyncio.sleep(RUN_INTERVAL)
+            log.info("New announcer coin: %s", coin_name)
+            log.info("All new coins: %s", [coin.name().hex() for coin in final_bundle.additions()])
+
+            # sleep until next run
+            log.info("Sleeping for %s seconds", RUN_INTERVAL)
+            await asyncio.sleep(RUN_INTERVAL)
 
 
 def main():

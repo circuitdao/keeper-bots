@@ -107,7 +107,68 @@ async def test_order_placement_onchain(collateral, stable):
     await asyncio.sleep(10)
 
 
+PRICE_PRECISION = 10**2
+TREASURY_MINIMUM = 18
+
+RUN_INTERVAL = 1 * 60
+CONTINUE_DELAY = 10
+
+
+
+
+
+
+
+
+
+
+
 async def run_recharge_bot(collateral, stable, proxy_instrument, proxy, verbose=False):
+
+    parser = argparse.ArgumentParser(description="Circuit reference Oracle price update bot")
+    parser.add_argument(
+        "--rpc-url",
+        type=str,
+        help="Base URL for the Circuit RPC API server",
+        default="http://localhost:8000",
+    )
+    parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
+    parser.add_argument(
+        "--private-key", "-p",
+        type=str,
+        default=os.environ.get("PRIVATE_KEY"),
+        help="Private key for your coins",
+    )
+    parser.add_argument(
+        "--proxy-usd",
+        type=str,
+        default="USDT",
+        help="BYC proxy asset used for hedging",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False
+        help="Verbose output"
+    )
+
+    args = parser.parse_args()
+
+    if not args.private_key:
+        raise ValueError("No private key provided")
+
+    # Set output verbosity
+    verbose = args.verbose
+
+    collateral = "XCH" # CircuitDAO collateral asset
+    stable = "BYC" # CircuitDAO stablecoin (BYC)
+
+    # BYC proxy asset to be used for hedging
+    # Note: on OKX, instID uniquely identifies the market. No need to know the instrument type.
+    proxy_instrument = SPOT
+    proxy = args.proxy_usd
+
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
 
     load_dotenv()
 
@@ -135,26 +196,77 @@ async def run_recharge_bot(collateral, stable, proxy_instrument, proxy, verbose=
     await asyncio.gather(listen_to_balances_okx(ws_okx_private, balances_okx, verbose),
                          listen_to_order_book_okx(order_book_okx, verbose=False),
                          listen_to_orders_okx(ws_okx_private, orders_okx, verbose),
-                         listen_to_treasury(collateral, stable, proxy), # TODO
+                         #listen_to_treasury(collateral, stable, proxy), # TODO
                          test_order_placement_okx(collateral, proxy),
                          test_order_placement_onchain(collateral, stable))
 
     # Instantiante on-chain balances object
     #balances_onchain = Balances(assets=[collateral, stable], verbose=verbose)
 
+    while True:
+
+        try:
+            treasury = await rpc_client.upkeep_treasury_show()
+        except httpx.ReadTimeout as err:
+            log.error("Failed to show Treasury due to ReadTimeout: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+        except ValueError as err:
+            log.error("Failed to show Treasury due to ValueError: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+        except Exception as err:
+            log.error("Failed to show Treasury: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+
+        #if not treasury["can_start_recharge_auction"]:
+
+        try:
+            recharge_coins = await rpc_client.upkeep_recharge_list()
+        except httpx.ReadTimeout as err:
+            log.error("Failed to list Recharge Auction coins due to ReadTimeout: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+        except ValueError as err:
+            log.error("Failed to list Recharge Auction coins due to ValueError: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+        except Exception as err:
+            log.error("Failed to list Recharge Auction coins: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+
+        if treasury["can_start_recharge_auction"]:
+            started = False
+            for c in recharge_coins:
+                if c.status == "STANDBY":
+                    try:
+                        await rpc_client.upkeep_treasury.start(COIN_NAME=c.name)
+                    except httpx.ReadTimeout as err:
+                        log.error("Failed to start Recharge Auction due to ReadTimeout: %s", err)
+                        continue
+                    except ValueError as err:
+                        log.error("Failed to start Recharge Auction due to ValueError: %s", err)
+                        continue
+                    except Exception as err:
+                        log.error("Failed to start Recharge Auction: %s", err)
+                        continue
+                    else:
+                        started = True
+                        break
+
+            if not started:
+                log.error("Failed to start Recharge Auction despite trying all recharge auction coins on stand-by")
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
+
+        # sleep until next run
+        log.info("Sleeping for %s seconds", RUN_INTERVAL)
+        await asyncio.sleep(RUN_INTERVAL)
+
 
 if __name__ == '__main__':
-
-    # Set output verbosity
-    verbose = True # True or False
-
-    collateral = "XCH" # CircuitDAO collateral asset
-    stable = "BYC" # CircuitDAO stablecoin (BYC)
-
-    # BYC proxy asset to be used for hedging
-    # Note: on OKX, instID uniquely identifies the market. No need to know the instrument type.
-    proxy_instrument = SPOT
-    proxy = "USDT"
 
     asyncio.run(run_recharge_bot(collateral, stable, proxy_instrument, proxy, verbose))
 

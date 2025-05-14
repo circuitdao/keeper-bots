@@ -43,6 +43,10 @@ async def run_statutes():
     )
 
     args = parser.parse_args()
+
+    if not args.private_key:
+        raise ValueError("No private key provided")
+
     rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
 
     while True:

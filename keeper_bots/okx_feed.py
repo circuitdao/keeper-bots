@@ -36,6 +36,21 @@ class OkxFeed(WsPublicAsync):
         self.verbose = verbose
         self.coinbase_feed = CoinbaseFeed(self.bq()[1], uquote)
 
+    async def __aenter__(self):
+        log.info("Entering OkxFeed context, connecting to OKX websocket and subscribing...")
+        await self.start()  # Connect to WebSocket
+        await self.subscribe()  # Subscribe to trades channel
+        return self  # Return the OkxFeed instance for use in 'async with'
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        log.info("Exiting OkxFeed context, unsubscribing and closing OKX websocket connection...")
+        try:
+            await self.unsubscribe()  # Unsubscribe from trades channel
+        except Exception as e:
+            log.error("Error during unsubscribe: %s", str(e), extra={"exception": str(e)})
+        finally:
+            await self.stop()  # Close WebSocket connection
+
     # Wrap base class subscribe function
     async def subscribe(self):
         await super().subscribe([{"channel": "trades", "instId": self.sym}], self.__call__)
