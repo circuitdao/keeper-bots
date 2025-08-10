@@ -34,7 +34,7 @@ async def run_announcer():
         "--rpc-url",
         type=str,
         help="Base URL for the Circuit RPC API server",
-        default="http://localhost:8000",
+        default=os.environ.get("RPC_URL", 'http://localhost:8000'),
     )
     parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
     parser.add_argument(
@@ -44,6 +44,7 @@ async def run_announcer():
         default=os.environ.get("PRIVATE_KEY"),
     )
     args = parser.parse_args()
+    log.info("Using RPC URL: %s", args.rpc_url)
     rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
 
     log.info("Announcer configure bot started")
@@ -54,11 +55,11 @@ async def run_announcer():
         try:
             announcers = await rpc_client.announcer_show()
         except httpx.ReadTimeout as err:
-            log.error("Failed to show announcer due to ReadTimeout: %s", err)
+            log.exception("Failed to show announcer due to ReadTimeout: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
-            log.error("Failed to show announcer: %s", err)
+            log.exception("Failed to show announcer: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
