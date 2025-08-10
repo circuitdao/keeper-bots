@@ -68,7 +68,7 @@ async def run_announcer():
     args = parser.parse_args()
 
     if not args.private_key:
-        raise ValueError("No private key provided")
+        raise ValueError("No master private key provided. Set PRIVATE_KEY environment variable or provide via -p cmd line argument")
 
     rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
 
