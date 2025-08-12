@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "keeper-bots"
-version = "0.1.8"
+version = "0.1.10"
 description = "Keeper bots for Circuit protocol"
 authors = ["CircuitDAO"]
 license = "MIT"
