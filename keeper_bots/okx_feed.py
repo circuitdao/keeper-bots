@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from okx_async.websocket.WsPublicAsync import WsPublicAsync
 
-from coinbase_feed import CoinbaseFeed
+from keeper_bots.coinbase_feed import CoinbaseFeed
 
 log = logging.getLogger(__name__)
 

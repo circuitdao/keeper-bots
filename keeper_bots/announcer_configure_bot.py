@@ -13,7 +13,7 @@ from datetime import datetime
 from chia.types.spend_bundle import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
-
+from hsms.cmds.hsms import XCH_PER_MOJO
 
 if os.path.exists("log_conf.yaml"):
     with open("log_conf.yaml", "r") as f:
@@ -28,27 +28,37 @@ STATUTE_ANNOUNCER_VALUE_TTL = 32
 RUN_INTERVAL = 1 * 20
 CONTINUE_DELAY = 10
 
+
 async def run_announcer():
     parser = argparse.ArgumentParser(description="Circuit reference announcer bot")
     parser.add_argument(
         "--rpc-url",
         type=str,
         help="Base URL for the Circuit RPC API server",
-        default=os.environ.get("RPC_URL", 'http://localhost:8000'),
+        default=os.environ.get('RPC_URL', 'http://localhost:8000'),
     )
-    parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
+    parser.add_argument("--add-sig-data", type=str, default=os.environ.get("ADD_SIG_DATA", ""),
+                        help="Additional signature data")
     parser.add_argument(
         "--private-key", "-p",
         type=str,
         help="Private key for your coins",
-        default=os.environ.get("PRIVATE_KEY"),
+        default=os.environ.get("PRIVATE_KEY", ""),
     )
+
+    parser.add_argument('--fee-per-cost', '-fpc', type=str, default=int(os.environ.get("FEE_PER_COST", 0)),
+                        help='Add transaction fee, set as fee per cost.')
+
+    parser.add_argument("--fee-buffer", type=int, default=int(XCH_PER_MOJO),
+                        help="Fee buffer in XCH to add to announcer price to prevent expiry"
+                             " (default: 1 XCH)")
     args = parser.parse_args()
-    log.info("Using RPC URL: %s", args.rpc_url)
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
+    log.info("Announcer configure bot started: %s %s", args.rpc_url, len(args.private_key))
 
-    log.info("Announcer configure bot started")
+    if not args.private_key:
+        raise ValueError("No private key provided")
 
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost)
     while True:
 
         # show announcer
@@ -63,7 +73,7 @@ async def run_announcer():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        #print(f"{announcers=}")
+        # print(f"{announcers=}")
         if len(announcers) < 1:
             log.error("No announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
             await asyncio.sleep(CONTINUE_DELAY)
@@ -96,7 +106,9 @@ async def run_announcer():
             continue
 
         try:
-            statutes_min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]) # minimum min deposit in enacted bills and Statutes
+            statutes_min_deposit = int(statutes["implemented_statutes"][
+                                           "ANNOUNCER_MINIMUM_DEPOSIT"])  # minimum min deposit in enacted bills and Statutes
+
         except KeyError as err:
             log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT due to KeyError: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
@@ -111,7 +123,8 @@ async def run_announcer():
             continue
 
         try:
-            statutes_price_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_VALUE_TTL"]) # minimum price TTL in enacted bills and Statutes
+            statutes_price_ttl = int(statutes["implemented_statutes"][
+                                         "ANNOUNCER_MAXIMUM_VALUE_TTL"])  # minimum price TTL in enacted bills and Statutes
         except KeyError as err:
             log.error("Failed to get value of Statute ANNOUNCER_VALUE_TTL due to KeyError: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
@@ -125,13 +138,12 @@ async def run_announcer():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-
         max_min_deposit = statutes_min_deposit
         min_price_ttl = statutes_price_ttl
 
         # check for bills
         try:
-            #bill_coins = rpc_client.upkeep_state(bills=True)
+            # bill_coins = rpc_client.upkeep_state(bills=True)
             bill_coins = await rpc_client.upkeep_bills_list(enacted=True)
         except httpx.ReadTimeout as err:
             log.error("Failed to get governance coins with bills due to ReadTimeout: %s", err)
@@ -153,10 +165,11 @@ async def run_announcer():
 
             try:
                 if c["bill"]["statute_index"] == STATUTE_ANNOUNCER_MINIMUM_DEPOSIT:
-                    log.info("Found bill to change announcer MIN_DEPOSIT to %s. Status: %s", c['bill']['value'], c['status']['status'])
+                    log.info("Found bill to change announcer MIN_DEPOSIT to %s. Status: %s", c['bill']['value'],
+                             c['status']['status'])
                     if (
-                        c["status"]["status"] in ['IN_IMPLEMENTATION_DELAY', 'IMPLEMENTABLE']
-                        and c["bill"]["value"] > max_min_deposit
+                            c["status"]["status"] in ['IN_IMPLEMENTATION_DELAY', 'IMPLEMENTABLE']
+                            and c["bill"]["value"] > max_min_deposit
                     ):
                         # update max_min_deposit
                         max_min_deposit = c["bill"]["value"]
@@ -175,7 +188,8 @@ async def run_announcer():
 
             try:
                 if c["bill"]["statute_index"] == STATUTE_ANNOUNCER_VALUE_TTL:
-                    log.info(f"Found bill to change announcer VALUE_TTL to %s. Status: %s", c['bill']['value'], c['status']['status'])
+                    log.info(f"Found bill to change announcer VALUE_TTL to %s. Status: %s", c['bill']['value'],
+                             c['status']['status'])
                     if (
                             c["status"]["status"] in ['IN_IMPLEMENTATION_DELAY', 'IMPLEMENTABLE']
                             and c["bill"]["value"] < min_price_ttl
@@ -204,12 +218,13 @@ async def run_announcer():
         new_min_deposit = None
         new_deposit = None
         req_min_deposit = max(max_min_deposit, statutes_min_deposit)
-        if announcer["min_deposit"] != req_min_deposit:
+        if announcer["min_deposit"] != req_min_deposit or announcer['deposit'] < req_min_deposit + int(
+                (args.fee_buffer * 0.2 if args.fee_per_cost else 0)):
             new_min_deposit = req_min_deposit
             # check if we need to increase deposit
             if announcer["deposit"] < new_min_deposit:
                 log.info("Must increase announcer deposit: %s -> %s", announcer["deposit"], new_min_deposit)
-                new_deposit = new_min_deposit
+                new_deposit = new_min_deposit + args.fee_buffer
                 # check if we have enough XCH to increase deposit
                 try:
                     xch_balance = (await rpc_client.wallet_balances())["xch"]
@@ -226,7 +241,7 @@ async def run_announcer():
                     await asyncio.sleep(CONTINUE_DELAY)
                     continue
                 req_xch_balance = req_min_deposit - announcer["deposit"]
-                if xch_balance < req_xch_balance: # TODO: take tx fees into account
+                if xch_balance < req_xch_balance:  # TODO: take tx fees into account
                     json_msg = {
                         "error_message": "Insufficient XCH balance to increase MIN_DEPOSIT on announcer",
                         "announcer_launcher_id": announcer["launcher_id"],
@@ -253,7 +268,8 @@ async def run_announcer():
         if new_price_ttl or new_min_deposit:
             log.info(
                 (f"Configuring announcer {announcer['name']}.")
-                + (f"  MIN_DEPOSIT: {announcer['min_deposit']} -> {new_min_deposit}" if new_min_deposit is not None else "")
+                + (
+                    f"  MIN_DEPOSIT: {announcer['min_deposit']} -> {new_min_deposit}" if new_min_deposit is not None else "")
                 + (f"  DEPOSIT: {announcer['deposit']} -> {new_deposit}" if new_deposit is not None else "")
                 + (f"  VALUE_TTL: {announcer['price_ttl']} -> {new_price_ttl}" if new_price_ttl is not None else "")
             )

@@ -27,11 +27,11 @@ from circuit_cli.client import CircuitRPCClient
 from okx_async.websocket.WsPrivate import WsPrivate
 from okx_async.AsyncTrade import AsyncTradeAPI
 
-from okx_feed import OkxFeed
-from okx_order_book import OkxOrderBook
-from okx_orders import OkxOrders
-from okx_balances import OkxBalances
-from utils import SPOT
+from keeper_bots.okx_feed import OkxFeed
+from keeper_bots.okx_order_book import OkxOrderBook
+from keeper_bots.okx_orders import OkxOrders
+from keeper_bots.okx_balances import OkxBalances
+from keeper_bots.utils import SPOT
 
 
 def get_market(base, quote):

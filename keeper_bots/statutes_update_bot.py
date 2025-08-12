@@ -32,22 +32,35 @@ async def run_statutes():
         "--rpc-url",
         type=str,
         help="Base URL for the Circuit RPC API server",
-        default="http://localhost:8000",
+        default=os.environ.get("RPC_URL", "http://localhost:8000"),
     )
-    parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
     parser.add_argument(
-        "--private-key", "-p",
+        "--add-sig-data",
+        type=str,
+        default=os.environ.get("ADD_SIG_DATA", ""),
+        help="Additional signature data",
+    )
+    parser.add_argument(
+        "--private-key",
+        "-p",
         type=str,
         help="Private key for your coins",
-        default=os.environ.get("PRIVATE_KEY"),
+        default=os.environ.get("PRIVATE_KEY", ""),
     )
 
+    parser.add_argument(
+        "--fee-per-cost",
+        "-fpc",
+        type=str,
+        default=int(os.environ.get("FEE_PER_COST", 0)),
+        help="Add transaction fee, set as fee per cost.",
+    )
     args = parser.parse_args()
 
     if not args.private_key:
         raise ValueError("No private key provided")
 
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost)
 
     while True:
 

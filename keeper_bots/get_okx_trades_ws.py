@@ -11,7 +11,7 @@ import asyncio
 #from coinbase.websocket import WSClient
 #from okx_async.websocket.WsPublic import WsPublic
 
-from price_feed.okx_feed import OkxFeed
+from keeper_bots.okx_feed import OkxFeed
 
 
 # Subscribe to OKX websocket and listen to trades
