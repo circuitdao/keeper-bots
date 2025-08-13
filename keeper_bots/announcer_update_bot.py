@@ -150,7 +150,7 @@ async def run_announcer():
                     "market_price": price,
                 }
                 log.warning("XCH/USD market price is 0", extra=json_msg)
-            elif abs(announcer["price"] / price - 1) <= PRICE_UPDATE_THRESHOLD_BPS / 10000.0:
+            elif announcer['expires_in'] > 10 * 60 and abs(announcer["price"] / price - 1) <= PRICE_UPDATE_THRESHOLD_BPS / 10000.0:
                 # json_msg = {
                 #    "info_message": "Price update threshold not exceeded",
                 #    "announcer_price": announcer["price"],
