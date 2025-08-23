@@ -59,13 +59,19 @@ loggers:
     handlers:
       - access
     propagate: no
+  okx_feed:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
   announcer_configure_bot:
     level: INFO
     handlers:
       - json
       - access
     propagate: no
-  announcer_price_bot:
+  announcer_update_bot:
     level: INFO
     handlers:
       - json

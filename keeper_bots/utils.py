@@ -1,3 +1,45 @@
+from dotenv import dotenv_values
+from filelock import FileLock
+
+## Function to set or update a variable in the .env file
+#def set_dotenv_variable(key, value, env_file=".env"):
+#    with FileLock(f"{env_file}.lock"):
+#        # Load existing .env file as a dictionary
+#        env_vars = dotenv_values(env_file)
+#
+#        # Update the variable
+#        env_vars[key] = str(value)  # Convert value to string for .env file
+#
+#        # Write back to .env file
+#        with open(env_file, "w") as f:
+#            for k, v in env_vars.items():
+#                f.write(f"{k}={v}\n")
+
+# Function to set or update a variable in the .env file
+# Locks file so it works in multi_process environment
+# Preserves comments in file
+def set_dotenv_variable(key, value, env_file=".env"):
+    with FileLock(f"{env_file}.lock"):
+        try:
+            with open(env_file, "r") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            lines = []
+        key_found = False
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith(f"{key}="):
+                comment = line[line.index("#"):] if "#" in line else ""
+                new_lines.append(f"{key}={value} {comment}\n")
+                key_found = True
+            else:
+                new_lines.append(line)
+        if not key_found:
+            new_lines.append(f"{key}={value}\n")
+        with open(env_file, "w") as f:
+            f.writelines(new_lines)
+
+
 # Symbol names
 UPDATE_TIME = "UPDATE TIME"
 CREATE_TIME = "CREATE TIME"

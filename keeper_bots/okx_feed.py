@@ -1,8 +1,10 @@
+import os
 import asyncio
 import aiofiles
 from collections import deque
 import math
 import json
+import yaml
 import logging.config
 from datetime import datetime, timedelta
 
@@ -10,7 +12,13 @@ from okx_async.websocket.WsPublicAsync import WsPublicAsync
 
 from keeper_bots.coinbase_feed import CoinbaseFeed
 
-log = logging.getLogger(__name__)
+if os.path.exists("log_conf.yaml"):
+    with open("log_conf.yaml", "r") as f:
+        config = yaml.safe_load(f)
+        logging.config.dictConfig(config)
+
+log = logging.getLogger("okx_feed")
+#log = logging.getLogger(__name__)
 
 # OKX price feed
 # Keeps track of the volume-weighted average price based on trades on OKX
@@ -99,7 +107,10 @@ class OkxFeed(WsPublicAsync):
                 self.starttime = datetime.utcnow()
                 log.info("Subscribed to %s spot trades on OKX", self.sym)
                 log.info("  Price calculation window length")
-                log.info("    on start-up: %ss", int(self.startup_window_length.total_seconds()))
+                try:
+                    log.info("    on start-up: %ss", int(self.startup_window_length.total_seconds()))
+                except Exception as err:
+                    print(str(err))
                 log.info("    post ramp-up: %ss", int(self.window_length.total_seconds()))
                 log.info("  Start time (UTC): %s", self.starttime.strftime("%Y-%m-%d %H:%M:%S"))
             else:
@@ -168,7 +179,7 @@ class OkxFeed(WsPublicAsync):
             log.info("  %s", message)
 
     async def get_price(self):
-        #log.info("PRICE: %.4f", self.price)
+        log.info("OKX price: %.4f", self.price)
         return self.price
 
     # Save price to text file

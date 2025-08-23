@@ -31,3 +31,6 @@ MANIFEST
 **/*~
 **/#*#
 **/.#*
+
+# Ignore dotenv files
+**/.env*

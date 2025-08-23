@@ -12,7 +12,8 @@ python = "~3.11"
 httpx = {extras = ["http2"], version = "^0.27.0"}
 python-dotenv = "^1.0.0"
 autobahn = "^23.6.2"
-chia-blockchain = "^2.5.4"
+#chia-blockchain = "^2.5.4"
+chia-blockchain = "==2.5.4"
 service-identity = "^24.1.0"
 #circuit-cli = {path = "../circuit-cli", develop = true}
 circuit-cli = {git = "https://github.com/circuitdao/circuit-cli.git", branch = "main"}
