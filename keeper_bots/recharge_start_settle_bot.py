@@ -1,9 +1,12 @@
 ##
-## Bot that start CircuitDAO recharge auctions
+## Bot to start and settle CircuitDAO recharge auctions
 ##
 ## The bot:
-## 1) monitors treasury
-## 2) triggers recharge auction
+## 1) retrieves recharge auction coin
+## 2) settles any settlable recharge auctions
+## 3) checks whether treasury is below min
+## 4) if so, starts recharge auction (if there is a
+##     recharge auction coin in stand-by mode)
 
 import os
 import asyncio
@@ -20,16 +23,16 @@ if os.path.exists("log_conf.yaml"):
         config = yaml.safe_load(f)
         logging.config.dictConfig(config)
 
-log = logging.getLogger("recharge_start_bot")
+log = logging.getLogger("recharge_start_settle_bot")
 
 
 RUN_INTERVAL = 1 * 60
 CONTINUE_DELAY = 10
 
 
-async def run_recharge_start_bot():
+async def run_recharge_start_settle_bot():
 
-    parser = argparse.ArgumentParser(description="Circuit reference Recharge auction start bot")
+    parser = argparse.ArgumentParser(description="Circuit reference Recharge auction start and settle bot")
     parser.add_argument(
         "--rpc-url",
         type=str,
@@ -47,7 +50,7 @@ async def run_recharge_start_bot():
         "--settle-all",
         action="store_true",
         type=bool,
-        default=False,
+        default=True,
         help="Settle all recharge auctions, not just the ones we have won"
     )
 
@@ -98,15 +101,12 @@ async def run_recharge_start_bot():
                     await rpc_client.upkeep_recharge_settle(c["name"])
                 except httpx.ReadTimeout as err:
                     log.error("Failed to settle Recharge Auction due to ReadTimeout: %s", err)
-                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
                 except ValueError as err:
                     log.error("Failed to settle Recharge Auction due to ValueError: %s", err)
-                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
                 except Exception as err:
                     log.error("Failed to settle Recharge Auction: %s", err)
-                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
 
                 log.info("Settled Recharge Auction %s", c["name"])
@@ -134,6 +134,7 @@ async def run_recharge_start_bot():
             # start a recharge auction
             started = False
             for c in recharge_coins:
+
                 if c["status"] == "STANDBY":
 
                     log.info("Starting Recharge Auction %s", c["name"])
@@ -155,9 +156,11 @@ async def run_recharge_start_bot():
                         break
 
             if not started:
-                log.error("Failed to start Recharge Auction on any of the Recharge Auction coins")
+                log.error("Failed to start Recharge Auction on any of the %s Recharge Auction coins on stand-by", len([c for c in recharge_coins if c["statuts"] == "STANDBY"]))
                 await asyncio.sleep(CONTINUE_DELAY)
                 continue
+            else:
+                log.info("Started Recharge Auction %s", c["name"])
 
         # sleep until next run
         log.info("Sleeping for %s seconds", RUN_INTERVAL)
@@ -166,5 +169,5 @@ async def run_recharge_start_bot():
 
 if __name__ == '__main__':
 
-    asyncio.run(run_recharge_start_bot())
+    asyncio.run(run_recharge_start_settle_bot())
 

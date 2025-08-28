@@ -77,6 +77,24 @@ loggers:
       - json
       - access
     propagate: no
+  recharge_start_settle_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
+  surplus_start_settle_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
+  governance_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
 root:
   level: INFO
   handlers:
