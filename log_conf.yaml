@@ -83,6 +83,12 @@ loggers:
       - json
       - access
     propagate: no
+  savings_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
   surplus_start_settle_bot:
     level: INFO
     handlers:

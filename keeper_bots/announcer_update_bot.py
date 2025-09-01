@@ -9,10 +9,9 @@ import logging.config
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-from chia.types.spend_bundle import SpendBundle
+from chia_rs import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
-from hsms.cmds.hsms import XCH_PER_MOJO
 
 from keeper_bots.okx_feed import OkxFeed
 from keeper_bots.utils import set_dotenv_variable
@@ -21,6 +20,7 @@ if os.path.exists("log_conf.yaml"):
     with open("log_conf.yaml", "r") as f:
         config = yaml.safe_load(f)
         logging.config.dictConfig(config)
+
 
 log = logging.getLogger("announcer_update_bot")
 
@@ -39,6 +39,8 @@ async def run_announcer():
 
     rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
     private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
+    add_sig_data = str(os.getenv("ADD_SIG_DATA")) # Additional signature data (depends on network)
+    fee_per_cost = int(os.getenv("FEE_PER_COST")) # Fee per cost for transactions
     RUN_INTERVAL = int(os.getenv("ANNOUNCER_UPDATE_RUN_INTERVAL")) # Frequency (in seconds) with which to run bot
     CONTINUE_DELAY = int(os.getenv("ANNOUNCER_UPDATE_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
     TTL_BUFFER = int(os.getenv("ANNOUNCER_UPDATE_TTL_BUFFER")) # Update price no later than on next run after price expiry minus TTL buffer has passed
@@ -53,6 +55,12 @@ async def run_announcer():
     if startup_window > average_window:
         raise ValueError("Start-up window must not be longer than averaging window")
 
+    log.info("Announcer update bot started: %s", rpc_url)
+    log.info(
+        "FEE_PER_COST=%s RUN_INTERVAL=%s CONTINUE_DELAY=%s TTL_BUFFER=%s UPDATE_THRESHOLD_BPS=%s",
+        fee_per_cost, RUN_INTERVAL, CONTINUE_DELAY, TTL_BUFFER, UPDATE_THRESHOLD_BPS,
+    )
+
     # adjust TTL buffer by taking into account timestamp flexibility in penalize operation,
     # run interval and continue delay, as well as possibility that runs may fail
     TTL_BUFFER_ADJ = max(TTL_BUFFER, MAX_TX_BLOCK_TIME + max(RUN_INTERVAL, CONTINUE_DELAY) + (2 * CONTINUE_DELAY) + 1)
@@ -62,12 +70,7 @@ async def run_announcer():
     UPDATE_THRESHOLD_BPS_ADJ = UPDATE_THRESHOLD_BPS # setting default value
     log.info("Set default adjusted update threshold [bps]: %s", UPDATE_THRESHOLD_BPS_ADJ)
 
-    rpc_client = CircuitRPCClient(
-        rpc_url,
-        private_key,
-        os.getenv("ADD_SIG_DATA"), # Additional signature data (depends on network)
-        int(os.getenv("FEE_PER_COST")), # Fee per cost for transactions
-    )
+    rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
     # Connect to OKX price feed
     sym = "XCH-USDT"
@@ -88,6 +91,7 @@ async def run_announcer():
         while True:
 
             # update parameters
+            print("Re-load environment variables from file and update if there are any changes")
             try:
                 # load env variables, overriding existing values (if any)
                 load_dotenv(override=True)
@@ -140,12 +144,20 @@ async def run_announcer():
             except Exception as err:
                 # log error and continue with existing parameter
                 log.error("Failed to get Statutes: %s", str(err))
+                log.info(
+                    "Continuing with existing update threshold and adjusted update threshold: %s bps, %s bps",
+                    statutes_update_threshold_bps, UPDATE_THRESHOLD_BPS_ADJ
+                )
             else:
                 try:
                     statutes_update_threshold_bps = int(statutes["implemented_statutes"]["ORACLE_PRICE_UPDATE_DELTA_BPS"])
                 except Exception as err:
                     # log error and continue with existing parameter
                     log.error("Failed to get Statute ORACLE_PRICE_UPDATE_DELTA_BPS: %s", str(err))
+                    log.info(
+                        "Continuing with existing update threshold and adjusted update threshold: %s bps, %s bps",
+                        statutes_update_threshold_bps, UPDATE_THRESHOLD_BPS_ADJ
+                    )
                 else:
                     update_threshold_bps_adj = min(UPDATE_THRESHOLD_BPS, statutes_update_threshold_bps)
                     if update_threshold_bps_adj != UPDATE_THRESHOLD_BPS_ADJ:
@@ -164,7 +176,6 @@ async def run_announcer():
                 await asyncio.sleep(CONTINUE_DELAY)
                 continue
 
-            # print(f"{announcers=}")
             if len(announcers) < 1:
                 log.error("No announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
                 await asyncio.sleep(CONTINUE_DELAY)

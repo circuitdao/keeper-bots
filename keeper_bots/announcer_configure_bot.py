@@ -9,8 +9,9 @@ import json
 import yaml
 import logging.config
 from datetime import datetime
+from dotenv import load_dotenv
 
-from chia.types.spend_bundle import SpendBundle
+from chia_rs import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
 
@@ -21,103 +22,61 @@ if os.path.exists("log_conf.yaml"):
 
 log = logging.getLogger("announcer_configure_bot")
 
-MOJOS_PER_XCH = 1_000_000_000_000
 
+MOJOS_PER_XCH = 1_000_000_000_000
 STATUTE_ANNOUNCER_MINIMUM_DEPOSIT = 34
 STATUTE_ANNOUNCER_MAXIMUM_VALUE_TTL = 35
 
-#FEE_BUFFER_REFILL_THRESHOLD = 0.2 # fee buffer gets re-filled if buffer balance drops below this ratio
-#RUN_INTERVAL = 1 * 20
-#CONTINUE_DELAY = 10
+load_dotenv(override=True)
+
+
+rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
+private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
+add_sig_data = os.getenv("ADD_SIG_DATA") # Additional signature data (depends on network)
+fee_per_cost = int(os.getenv("FEE_PER_COST")) # Fee per cost for transactions
+RUN_INTERVAL = int(os.getenv("ANNOUNCER_CONFIGURE_RUN_INTERVAL")) # Frequency (in seconds) with which to run bot
+CONTINUE_DELAY = int(os.getenv("ANNOUNCER_CONFIGURE_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
+DEPOSIT_BUFFER = int(float(os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER")) * MOJOS_PER_XCH) # additional deposit (in XCH) on top of MIN_DEPOSIT to keep in announcer
+DEPOSIT_BUFFER_REFILL_THRESHOLD = float(os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER_REFILL_THRESHOLD")) # threshold (eg 0.2 = 20%) below which we fully refill deposit buffer
+
+if not rpc_url:
+    raise ValueError("No URL found at which Circuit RPC server can be reached")
+if not private_key:
+    raise ValueError("No master private key found")
+
+rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+
 
 async def run_announcer():
-    parser = argparse.ArgumentParser(description="Circuit reference announcer bot")
-    parser.add_argument(
-        "--rpc-url", type=str,
-        default=os.environ.get('RPC_URL', 'http://localhost:8000'),
-        help="Base URL for the Circuit RPC API server",
-    )
-    parser.add_argument(
-        "--add-sig-data", type=str,
-        default=os.environ.get("ADD_SIG_DATA", ""),
-        help="Additional signature data"
-    )
-    parser.add_argument(
-        "--private-key", "-p", type=str,
-        default=os.environ.get("PRIVATE_KEY", ""),
-        help="Private key for your coins",
-    )
-    parser.add_argument(
-        '--fee-per-cost', '-fpc', type=int,
-        default=int(os.environ.get("FEE_PER_COST", 0)),
-        help='Add transaction fee, set as fee per cost.'
-    )
-    parser.add_argument(
-        "--run-interval", type=int,
-        default=int(os.environ.get("ANNOUNCER_CONFIGURE_RUN_INTERVAL", 60)),
-        help="Frequency (in seconds) with which to run bot"
-    )
-    parser.add_argument(
-        "--continue-delay", type=int,
-        default=int(os.environ.get("ANNOUNCER_CONFIGURE_CONTINUE_DELAY", 10)),
-        help="Wait (in seconds) before bot runs again after a failed run"
-    )
-    parser.add_argument(
-        "--fee-buffer", type=float,
-        default=float(os.environ.get("ANNOUNCER_CONFIGURE_FEE_BUFFER", 1.0)),
-        help="Amount of XCH to add to announcer min deposit to be used for tx fees (default: 1 XCH)"
-    )
-    parser.add_argument(
-        "--fee-buffer-refill-threshold", type=float,
-        default=float(os.environ.get("ANNOUNCER_CONFIGURE_FEE_BUFFER_REFILL_THRESHOLD", 0.2)),
-        help="Ratio below which fee buffer gets refilled"
-    )
 
-    args = parser.parse_args()
-    fee_buffer = int(args.fee_buffer * MOJOS_PER_XCH)
-
-    if not args.private_key:
-        raise ValueError("No private key provided")
-
-    log.info("Announcer configure bot started: %s %s", args.rpc_url, len(args.private_key))
+    log.info("Announcer configure bot started: %s", rpc_url)
     log.info(
-        "fee_per_cost=%s run_interval=%s continue_delay=%s fee_buffer=%s fee_buffer_refill_threshold=%s",
-        args.fee_per_cost, args.run_interval, args.continue_delay, args.fee_buffer, args.fee_buffer_refill_threshold,
+        "FEE_PER_COST=%s RUN_INTERVAL=%s CONTINUE_DELAY=%s DEPOSIT_BUFFER=%s DEPOSIT_BUFFER_REFILL_THRESHOLD=%s",
+        fee_per_cost, RUN_INTERVAL, CONTINUE_DELAY, DEPOSIT_BUFFER, DEPOSIT_BUFFER_REFILL_THRESHOLD,
     )
-
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost)
 
     while True:
-
-        # load env variables
-        load_dotenv()
-
-        RUN_INTERVAL = int(os.getenv("ANNOUNCER_CONFIGURE_RUN_INTERVAL"))
-        CONTINUE_DELAY = int(os.getenv("ANNOUNCER_CONFIGURE_CONTINUE_DELAY"))
-        fee_buffer = int(os.getenv("ANNOUNCER_CONFIGURE_FEE_BUFFER"))
-        fee_buffer_refill_threshold = int(os.getenv("ANNOUNCER_CONFIGURE_FEE_BUFFER_REFILL_THRESHOLD"))
 
         # show announcer
         try:
             announcers = await rpc_client.announcer_show()
         except httpx.ReadTimeout as err:
             log.exception("Failed to show announcer due to ReadTimeout: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
             log.exception("Failed to show announcer: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        # print(f"{announcers=}")
         if len(announcers) < 1:
-            log.error("No announcer found. Sleeping for %s seconds", args.continue_delay)
-            await asyncio.sleep(args.continue_delay)
+            log.error("No announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         approved_announcers = [x for x in announcers if x["approved"]]
         if len(approved_announcers) < 1:
-            log.warning("No approved announcer found. Sleeping for %s seconds", args.continue_delay)
-            await asyncio.sleep(args.continue_delay)
+            log.warning("No approved announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         if len(approved_announcers) > 1:
             log.error("More than one approved announcer found")
@@ -130,65 +89,64 @@ async def run_announcer():
             statutes = await rpc_client.statutes_list()
         except httpx.ReadTimeout as err:
             log.error("Failed to get Statutes due to ReadTimeout: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
             log.error("Failed to get Statutes due to ValueError: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
             log.error("Failed to get Statutes: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         try:
             statutes_min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"])
         except KeyError as err:
             log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT due to KeyError: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
             log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT due to ValueError: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
             log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         try:
             statutes_price_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_MAXIMUM_VALUE_TTL"])
         except KeyError as err:
             log.error("Failed to get value of Statute ANNOUNCER_MAXIMUM_VALUE_TTL due to KeyError: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
             log.error("Failed to get value of Statute ANNOUNCER_MAXIMUM_VALUE_TTL due to ValueError: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
             log.error("Failed to get value of Statute ANNOUNCER_MAXIMUM_VALUE_TTL: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         max_min_deposit = statutes_min_deposit # maximum min deposit in enacted bills and Statutes
         min_price_ttl = statutes_price_ttl # minimum max price TTL in enacted bills and Statutes
 
-        # check for bills
+        # check for enacted bills (ie those that can no longer be vetoed)
         try:
-            # bill_coins = rpc_client.upkeep_state(bills=True)
             bill_coins = await rpc_client.upkeep_bills_list(enacted=True)
         except httpx.ReadTimeout as err:
             log.error("Failed to get governance coins with bills due to ReadTimeout: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
             log.error("Failed to get governance coins with bills due to ValueError: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
             log.error("Failed to get governance coins with bills: %s", err)
-            await asyncio.sleep(args.continue_delay)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         log.info("Found %s enacted bills (incl lapsed ones)", len(bill_coins))
@@ -243,35 +201,35 @@ async def run_announcer():
                 break
 
         if error:
-            log.error("Error processing governance coins with non-empty bill. Sleeping for %s seconds", args.continue_delay)
-            await asyncio.sleep(args.continue_delay)
+            log.error("Error processing governance coins with non-empty bill. Sleeping for %s seconds", CONTINUE_DELAY)
+            await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         # update new_min_deposit, and, if necessary, deposit
         new_min_deposit = None
         new_deposit = None
         req_min_deposit = max(max_min_deposit, statutes_min_deposit)
-        min_acceptable_deposit = req_min_deposit + int(fee_buffer * args.fee_buffer_refill_threshold if args.fee_per_cost else 0)
+        min_acceptable_deposit = req_min_deposit + int((DEPOSIT_BUFFER * DEPOSIT_BUFFER_REFILL_THRESHOLD) if fee_per_cost else 0)
         if announcer["min_deposit"] != req_min_deposit or announcer['deposit'] < min_acceptable_deposit:
             new_min_deposit = req_min_deposit
             # check if we need to increase deposit
             if announcer["deposit"] < min_acceptable_deposit:
-                new_deposit = new_min_deposit + fee_buffer
+                new_deposit = new_min_deposit + DEPOSIT_BUFFER
                 log.info("Increasing announcer deposit: %s -> %s", announcer["deposit"], new_deposit)
                 # check if we have enough XCH to increase deposit
                 try:
                     xch_balance = (await rpc_client.wallet_balances())["xch"]
                 except httpx.ReadTimeout as err:
                     log.error("Failed to get wallet balance due to ReadTimeout: %s", err)
-                    await asyncio.sleep(args.continue_delay)
+                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
                 except ValueError as err:
                     log.error("Failed to get wallet balance due to ValueError %s", err)
-                    await asyncio.sleep(args.continue_delay)
+                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
                 except Exception as err:
                     log.error("Failed to get wallet balance %s", err)
-                    await asyncio.sleep(args.continue_delay)
+                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
                 req_xch_balance = new_deposit - announcer["deposit"]
                 if xch_balance < req_xch_balance:  # TODO: take tx fees into account
@@ -288,7 +246,7 @@ async def run_announcer():
                         "required_xch_balance_delta": req_xch_balance - xch_balance,
                     }
                     log.error("Failed to configure announcer", extra=json_msg)
-                    await asyncio.sleep(args.continue_delay)
+                    await asyncio.sleep(CONTINUE_DELAY)
                     continue
 
         # update new_price_ttl
@@ -315,19 +273,19 @@ async def run_announcer():
                 )
             except httpx.ReadTimeout as err:
                 log.error("Failed to configure announcer due to ReadTimeout: %s", err)
-                await asyncio.sleep(args.continue_delay)
+                await asyncio.sleep(CONTINUE_DELAY)
                 continue
             except ValueError as err:
                 log.error("Failed to configure announcer due to ValueError: %s", err)
-                await asyncio.sleep(args.continue_delay)
+                await asyncio.sleep(CONTINUE_DELAY)
                 continue
             except Exception as err:
                 log.error("Failed to configure announcer: %s", err)
-                await asyncio.sleep(args.continue_delay)
+                await asyncio.sleep(CONTINUE_DELAY)
                 continue
 
             final_bundle: SpendBundle = SpendBundle.from_json_dict(response["bundle"])
-            coin_name = final_bundle.additions()[0].name().hex()
+            coin_name = final_bundle.additions()[-1].name().hex()
             log.info("New announcer coin: %s", coin_name)
             log.info("All new coins: %s", [coin.name().hex() for coin in final_bundle.additions()])
 
@@ -336,17 +294,19 @@ async def run_announcer():
                 announcers = await rpc_client.announcer_show()
             except httpx.ReadTimeout as err:
                 log.error("Failed to show new announcer due to ReadTimeout: %s", err)
-                await asyncio.sleep(args.continue_delay)
+                log.info("Sleeping for %s seconds", RUN_INTERVAL)
+                await asyncio.sleep(RUN_INTERVAL)
                 continue
             except Exception as err:
                 log.error("Failed to show new announcer: %s", err)
-                await asyncio.sleep(args.continue_delay)
+                log.info("Sleeping for %s seconds", RUN_INTERVAL)
+                await asyncio.sleep(RUN_INTERVAL)
                 continue
 
             latest_announcers = [a for a in announcers if a["launcher_id"] == announcer["launcher_id"]]
             if not latest_announcers:
-                log.error(f"New announcer not found. Sleeping for {args.continue_delay} seconds")
-                asyncio.sleep(args.continue_delay)
+                log.error(f"New announcer not found. Sleeping for {RUN_INTERVAL} seconds")
+                await asyncio.sleep(RUN_INTERVAL)
                 continue
 
             new_announcer = latest_announcers[0]
@@ -367,8 +327,8 @@ async def run_announcer():
             )
 
         # sleep until next run
-        log.info("Sleeping for %s seconds", args.run_interval)
-        await asyncio.sleep(args.run_interval)
+        log.info("Sleeping for %s seconds", RUN_INTERVAL)
+        await asyncio.sleep(RUN_INTERVAL)
 
 
 def main():
