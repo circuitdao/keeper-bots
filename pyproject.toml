@@ -9,7 +9,8 @@ packages = [{include = "keeper_bots"}]
 
 [tool.poetry.dependencies]
 python = "~3.11"
-httpx = {extras = ["http2"], version = "^0.27.0"}
+#httpx = {version = "^0.27.0", extras = ["http2"]}
+httpx = {version = "^0.28.1", extras = ["http2"]}
 python-dotenv = "^1.0.0"
 autobahn = "^23.6.2"
 chia-blockchain = "2.5.5"

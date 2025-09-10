@@ -65,6 +65,24 @@ loggers:
       - json
       - access
     propagate: no
+  liquidation_start_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
+  liquidation_bid_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
+  bad_debt_recovery_bot:
+    level: INFO
+    handlers:
+      - json
+      - access
+    propagate: no
   announcer_configure_bot:
     level: INFO
     handlers:

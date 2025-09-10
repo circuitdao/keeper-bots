@@ -1,11 +1,15 @@
 import os
+import json
+from dotenv import load_dotenv
 from typing import Optional
 from utils import unparse_symbol
 from datetime import datetime
 #import okx_async.AsyncMarketData as AsyncMarketData
-from okx_async.websocket.WsPublic import WsPublic
+#from okx_async.websocket.WsPublic import WsPublic
+from okx_async.websocket.WsPublicAsync import WsPublicAsync
 
 from pprint import pprint
+
 
 class OkxOrderBook:
     """OKX order book class
@@ -13,7 +17,7 @@ class OkxOrderBook:
     Internally, the order book is a dict. Its fields include 'asks' and 'bids', each being a dict of price level to volume.
     """
 
-    def __init__(self, sym, uquote, verbose=False):
+    def __init__(self, sym, uquote, url, verbose=False):
         self.sym = sym
         assert len(self.bq()) == 2, "Symbol not valid. Must be of form <base>-<quote>"
         self.uquote = uquote
@@ -22,19 +26,25 @@ class OkxOrderBook:
         self.connection_id = None
         self.verbose = verbose
         self.book = {}
+        self.url = url
         #self.coinbase_feed = CoinbaseFeed(self.bq()[1], uquote)
 
     def bq(self):
         return self.sym.split("-")
 
     # Connect to websocket
-    def connect(self):
-        self.ws = WsPublic(url="wss://wsaws.okx.com:8443/ws/v5/public")
-        self.ws.start()
+    async def connect(self):
+        print(f"Connecting to OKX websocket at {self.url}")
+        ## Production: wss://wseea.okx.com:8443/ws/v5/public (wss://ws.okx.com:8443/ws/v5/public)
+        ## Demo: wss://wseeapap.okx.com:8443/ws/v5/public
+        self.ws = WsPublicAsync(url=self.url)
+        await self.ws.start()
 
     # Subscribe to 'books' websocket channel
-    def subscribe(self):
-        self.ws.subscribe([{"channel": "books", "instId": self.sym}], self)
+    async def subscribe(self):
+        print("Subscribing to OKX order book")
+        await self.ws.subscribe([{"channel": "books", "instId": self.sym}], self)
+        print("Subscribed to OKX order book")
 
     def print(self):
         print("Order book:")
@@ -44,6 +54,7 @@ class OkxOrderBook:
     """Info at: https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-order-book-channel"""
     def __call__(self, message):
         #print("publicCallback", message)
+        message = json.loads(message)
         if "event" in message:
             if message["event"] == "subscribe":
                 # Initialise feed data
@@ -58,7 +69,7 @@ class OkxOrderBook:
             raise Exception(f'Callback returned an error: {message["error"]}')
         elif "action" in message:
             if message["action"] == "snapshot":
-                #print("ORDER BOOK SNAPSHOT received")
+                print("ORDER BOOK SNAPSHOT received")
                 if len(message["data"]) > 1:
                     print("WARNING: More than one order book snapshot received")
                 for d in message["data"]:
@@ -67,7 +78,7 @@ class OkxOrderBook:
                         for depth in d[side]:
                             self.book[side][depth[0]] = depth[1]
             elif message["action"] == "update":
-                #print("ORDER BOOK UPDATE received")
+                print("ORDER BOOK UPDATE received")
                 if len(message["data"]) > 1:
                     print("WARNING: More than one order book update received")
                 for d in message["data"]:
@@ -96,6 +107,8 @@ class OkxOrderBook:
         amount - amount to buy or sell
         bq_toggle - whether amount is measured in base (True) or quote (False) currency
         """
+        if not self.book:
+            return None, None
 
         def dicttofloat(data):
             return float(data[0])
@@ -151,14 +164,6 @@ class OkxOrderBook:
                 break
 
         return (price, size)
-
-
-    def print(self):
-        print("ORDER BOOK:")
-        pprint(self.book)
-
-    def get_order_book(self):
-        return self.book
 
 
 """
