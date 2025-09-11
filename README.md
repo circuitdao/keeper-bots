@@ -1,14 +1,46 @@
 # Keeper Bots
 
-Keeper bots for the Circuit protocol that handle price announcements and oracle updates.
+Keeper bots for Circuit protocol that automate the execution of keeper operations.
 
 ## Overview
 
-The keeper bots system consists of three specialized bots that work together:
+The keeper bots system consists of the following specialized bots:
 
-1. **announcer_configure_bot** - Configures price announcers on the blockchain
-2. **announcer_update_bot** - Updates price feeds from external sources (OKX)
-3. **oracle_update_bot** - Updates oracle prices on the blockchain
+Oracle complex:
+
+1. **announcer_configure_bot** - Configures price announcers
+2. **announcer_update_bot** - Updates announcer price from external sources (OKX)
+3. **oracle_update_bot** - Adds new prices to oracle price queue
+4. **statutes_update_bot** - Updates statutes price
+
+Collateral vaults:
+
+5. **liquidation_start_bot** - Triggers liquidation auctions
+6. **liquidation_bid_bot** - Places bids in liquidation auctions and automatically hedges exposure (on OKX)
+7. **bad_debt_recovery_bot** - Recovers bad debt from collateral vaults
+
+Recharge auctions:
+
+8. **recharge_start_settle_bot** - Starts and settles recharge auctions
+9. **recharge_bid_bot** - Bids in recharge auctions and hedges exposure (on OKX) (TODO)
+
+Surplus auctions:
+
+10. **surplus_start_settle_bot** - Starts and settles surplus auctions
+11. **surplus_bid_bot** - Bids in surplus auctions and hedges exposure (on OKX) (TODO)
+
+Treasury:
+
+12. **treasury_rebalance_bot** - Rebalances the treasury
+
+Savings:
+
+13. **savings_bot** - Withdraws accrued interest from treasury to savings vault according to a customizable schedule
+
+Governance:
+
+14. **veto_bot** - Vetos bills according to customizable criteria (TODO)
+15. **bill_implementation_bot** - Implements bills (TODO)
 
 ## Architecture
 
