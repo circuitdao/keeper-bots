@@ -64,14 +64,12 @@ async def run_oracle():
         raise ValueError("No private key provided")
 
     rpc_client = CircuitRPCClient(
-        args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost
+        args.rpc_url, args.private_key, args.add_sig_data
     )
-
     while True:
-
+        await rpc_client.set_fee_per_cost()
         # update oracle
         log.info("Updating Oracle price")
-        # await rpc_client.upkeep_rpc_sync()
 
         try:
             data = await rpc_client.oracle_update()

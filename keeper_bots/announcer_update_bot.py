@@ -16,10 +16,16 @@ from circuit_cli.client import CircuitRPCClient
 from keeper_bots.okx_feed import OkxFeed
 from keeper_bots.utils import set_dotenv_variable
 
-if os.path.exists("log_conf.yaml"):
-    with open("log_conf.yaml", "r") as f:
-        config = yaml.safe_load(f)
-        logging.config.dictConfig(config)
+# Import dynamic logging configuration
+try:
+    from logging_config import setup_logging
+    setup_logging("announcer_update_bot")
+except ImportError:
+    # Fallback to static configuration if logging_config module is not available
+    if os.path.exists("log_conf.yaml"):
+        with open("log_conf.yaml", "r") as f:
+            config = yaml.safe_load(f)
+            logging.config.dictConfig(config)
 
 
 log = logging.getLogger("announcer_update_bot")
@@ -47,7 +53,6 @@ async def run_announcer():
     UPDATE_THRESHOLD_BPS = int(os.getenv("ANNOUNCER_UPDATE_UPDATE_THRESHOLD_BPS")) # Update price as soon as it has changed more than specified amount of bps
     startup_window = int(os.getenv("ANNOUNCER_UPDATE_STARTUP_WINDOW")) # Length of start-up window in seconds
     average_window = int(os.getenv("ANNOUNCER_UPDATE_AVERAGE_WINDOW")) # Length of window over which to calculate volume-weighted average price in seconds
-
     if not rpc_url:
         raise ValueError("No URL found at which Circuit RPC server can be reached")
     if not private_key:
@@ -71,10 +76,14 @@ async def run_announcer():
     log.info("Set default adjusted update threshold [bps]: %s", UPDATE_THRESHOLD_BPS_ADJ)
 
     rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
-
-    # Connect to OKX price feed
-    sym = "XCH-USDT"
-    uquote = "USD"  # ultimate quote currency
+    if "testnet" in rpc_url or "localhost" in rpc_url:
+        # Connect to OKX price feed
+        sym = "XRP-USDT"
+        uquote = "USD"  # ultimate quote currency
+    else:
+        # Connect to OKX price feed
+        sym = "XCH-USDT"
+        uquote = "USD"  # ultimate quote currency
 
     feed = OkxFeed(
         sym, uquote,
@@ -146,7 +155,7 @@ async def run_announcer():
                 log.error("Failed to get Statutes: %s", str(err))
                 log.info(
                     "Continuing with existing update threshold and adjusted update threshold: %s bps, %s bps",
-                    statutes_update_threshold_bps, UPDATE_THRESHOLD_BPS_ADJ
+                    update_threshold_bps, UPDATE_THRESHOLD_BPS_ADJ
                 )
             else:
                 try:
@@ -244,7 +253,7 @@ async def run_announcer():
             log.info("Updating announcer. Setting price to %.2f XCH/USD", price / PRICE_PRECISION)
 
             try:
-                response = await rpc_client.announcer_update(price, COIN_NAME=announcer["name"], units=True)
+                response = await rpc_client.announcer_update(price, coin_name=announcer["name"])
             except httpx.ReadTimeout as err:
                 log.error("Failed to update announcer due to ReadTimeout: %s", err)
                 await asyncio.sleep(CONTINUE_DELAY)

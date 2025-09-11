@@ -24,8 +24,6 @@ handlers:
     formatter: access
     class: logging.StreamHandler
     stream: ext://sys.stdout
-    filters:
-      - warn_and_below
   json:
     formatter: json
     class: logging.StreamHandler
@@ -33,6 +31,13 @@ handlers:
     level: ERROR
     filters:
       - error_and_above
+# YAML anchor for shared bot logger configuration
+bot_logger_config: &bot_logger_config
+  level: INFO
+  handlers:
+    - access
+  propagate: no
+
 loggers:
   sqlalchemy:
     level: ERROR
@@ -59,66 +64,23 @@ loggers:
     handlers:
       - access
     propagate: no
-  okx_feed:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  liquidation_start_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  liquidation_bid_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  bad_debt_recovery_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  announcer_configure_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  announcer_update_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  recharge_start_settle_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  savings_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  surplus_start_settle_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
-  governance_bot:
-    level: INFO
-    handlers:
-      - json
-      - access
-    propagate: no
+  # All bot loggers now share the same configuration using YAML references
+  # This eliminates duplication while maintaining individual logger names
+  announcer_configure_bot: *bot_logger_config
+  announcer_update_bot: *bot_logger_config
+  oracle_update_bot: *bot_logger_config
+  statutes_update_bot: *bot_logger_config
+  governance_bot: *bot_logger_config
+  recharge_start_settle_bot: *bot_logger_config
+  savings_bot: *bot_logger_config
+  surplus_start_settle_bot: *bot_logger_config
+  # Add other bot loggers here as needed - they will all inherit the shared config
+  bad_debt_recovery_bot: *bot_logger_config
+  liquidation_bid_bot: *bot_logger_config
+  liquidation_start_bot: *bot_logger_config
+  recharge_bot: *bot_logger_config
+  stability_fee_transfer_bot: *bot_logger_config
+  treasury_rebalance_bot: *bot_logger_config
 root:
   level: INFO
   handlers:

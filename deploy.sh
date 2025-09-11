@@ -30,6 +30,13 @@ usage() {
     echo "  -d, --dry-run                Show what would be done without executing"
     echo "  -h, --help                   Show this help message"
     echo ""
+    echo "What this script does:"
+    echo "  1. Updates version in pyproject.toml"
+    echo "  2. Builds and pushes Docker image with new version tag"
+    echo "  3. Updates terragrunt configurations with new image tag (forces VM recreation)"
+    echo "  4. Optionally updates infrastructure default version"
+    echo "  5. Commits all changes and creates a git tag"
+    echo ""
     echo "Examples:"
     echo "  $0                           # Increment patch version and deploy"
     echo "  $0 -t minor                  # Increment minor version"
@@ -181,6 +188,52 @@ update_infrastructure_version() {
     echo -e "${GREEN}✓ Infrastructure default version updated${NC}"
 }
 
+# Function to update terragrunt configurations with new image tag
+update_terragrunt_configs() {
+    local new_version=$1
+    
+    # Define terragrunt configuration paths
+    local terragrunt_paths=(
+        "../infra/chia-terragrunt/environments/testnet/price-announcers/announcer-1/terragrunt.hcl"
+        "../infra/chia-terragrunt/environments/testnet/price-announcers/announcer-2/terragrunt.hcl"
+    )
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${BLUE}[DRY RUN] Would update terragrunt configurations with image tag: $new_version${NC}"
+        for path in "${terragrunt_paths[@]}"; do
+            if [[ -f "$path" ]]; then
+                echo -e "${BLUE}[DRY RUN]   - $path${NC}"
+            fi
+        done
+        return 0
+    fi
+    
+    echo -e "${YELLOW}📝 Updating terragrunt configurations with image tag...${NC}"
+    
+    local updated_count=0
+    for path in "${terragrunt_paths[@]}"; do
+        if [[ -f "$path" ]]; then
+            echo -e "${YELLOW}   Updating: $path${NC}"
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS - update keeper_bots_tag line
+                sed -i '' "s/keeper_bots_tag   = \"[^\"]*\"/keeper_bots_tag   = \"$new_version\"/" "$path"
+            else
+                # Linux - update keeper_bots_tag line
+                sed -i "s/keeper_bots_tag   = \"[^\"]*\"/keeper_bots_tag   = \"$new_version\"/" "$path"
+            fi
+            updated_count=$((updated_count + 1))
+        else
+            echo -e "${YELLOW}⚠️  Terragrunt file not found: $path${NC}"
+        fi
+    done
+    
+    if [[ $updated_count -gt 0 ]]; then
+        echo -e "${GREEN}✓ Updated $updated_count terragrunt configuration(s)${NC}"
+    else
+        echo -e "${YELLOW}⚠️  No terragrunt configurations were updated${NC}"
+    fi
+}
+
 # Function to build and push Docker image
 build_and_push() {
     local version=$1
@@ -212,8 +265,21 @@ commit_changes() {
     echo -e "${YELLOW}📝 Committing version changes...${NC}"
     
     git add pyproject.toml
+    
+    # Add terragrunt configuration files if they exist and have been modified
+    if [[ -f "../infra/chia-terragrunt/environments/testnet/price-announcers/announcer-1/terragrunt.hcl" ]]; then
+        git add "../infra/chia-terragrunt/environments/testnet/price-announcers/announcer-1/terragrunt.hcl" 2>/dev/null || true
+    fi
+    if [[ -f "../infra/chia-terragrunt/environments/testnet/price-announcers/announcer-2/terragrunt.hcl" ]]; then
+        git add "../infra/chia-terragrunt/environments/testnet/price-announcers/announcer-2/terragrunt.hcl" 2>/dev/null || true
+    fi
+    
+    # Add infrastructure file if it was updated
+    if [[ "$UPDATE_INFRA" == true ]] && [[ -f "$INFRASTRUCTURE_PATH" ]]; then
+        git add "$INFRASTRUCTURE_PATH" 2>/dev/null || true
+    fi
 
-    git commit -m "Bump version to $new_version" || {
+    git commit -m "Bump version to $new_version and update deployment configurations" || {
         echo -e "${YELLOW}⚠️  No changes to commit (version might already be current)${NC}"
     }
     
@@ -274,6 +340,9 @@ main() {
     
     # Build and push Docker image
     build_and_push "$new_version"
+    
+    # Update terragrunt configurations with new image tag
+    update_terragrunt_configs "$new_version"
     
     # Commit changes
     commit_changes "$new_version"

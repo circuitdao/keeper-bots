@@ -1,14 +1,8 @@
-import argparse
 import asyncio
 import os
-import time
-import random
-import math
 import httpx
-import json
 import yaml
 import logging.config
-from datetime import datetime
 from dotenv import load_dotenv
 
 from chia_rs import SpendBundle
@@ -30,14 +24,20 @@ STATUTE_ANNOUNCER_MAXIMUM_VALUE_TTL = 35
 load_dotenv(override=True)
 
 
-rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
-private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
-add_sig_data = os.getenv("ADD_SIG_DATA") # Additional signature data (depends on network)
-fee_per_cost = int(os.getenv("FEE_PER_COST")) # Fee per cost for transactions
-RUN_INTERVAL = int(os.getenv("ANNOUNCER_CONFIGURE_RUN_INTERVAL")) # Frequency (in seconds) with which to run bot
-CONTINUE_DELAY = int(os.getenv("ANNOUNCER_CONFIGURE_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
-DEPOSIT_BUFFER = int(float(os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER")) * MOJOS_PER_XCH) # additional deposit (in XCH) on top of MIN_DEPOSIT to keep in announcer
-DEPOSIT_BUFFER_REFILL_THRESHOLD = float(os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER_REFILL_THRESHOLD")) # threshold (eg 0.2 = 20%) below which we fully refill deposit buffer
+rpc_url = str(os.getenv("RPC_URL"))  # Base URL for Circuit RPC API server
+private_key = str(os.getenv("PRIVATE_KEY"))  # Private master key that controls announcer
+add_sig_data = os.getenv("ADD_SIG_DATA")  # Additional signature data (depends on network)
+fee_per_cost = int(os.getenv("FEE_PER_COST"))  # Fee per cost for transactions
+RUN_INTERVAL = int(os.getenv("ANNOUNCER_CONFIGURE_RUN_INTERVAL"))  # Frequency (in seconds) with which to run bot
+CONTINUE_DELAY = int(
+    os.getenv("ANNOUNCER_CONFIGURE_CONTINUE_DELAY")
+)  # Wait (in seconds) before bot runs again after a failed run
+DEPOSIT_BUFFER = int(
+    float(os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER")) * MOJOS_PER_XCH
+)  # additional deposit (in XCH) on top of MIN_DEPOSIT to keep in announcer
+DEPOSIT_BUFFER_REFILL_THRESHOLD = float(
+    os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER_REFILL_THRESHOLD")
+)  # threshold (eg 0.2 = 20%) below which we fully refill deposit buffer
 
 if not rpc_url:
     raise ValueError("No URL found at which Circuit RPC server can be reached")
@@ -48,15 +48,17 @@ rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
 
 async def run_announcer():
-
     log.info("Announcer configure bot started: %s", rpc_url)
     log.info(
         "FEE_PER_COST=%s RUN_INTERVAL=%s CONTINUE_DELAY=%s DEPOSIT_BUFFER=%s DEPOSIT_BUFFER_REFILL_THRESHOLD=%s",
-        fee_per_cost, RUN_INTERVAL, CONTINUE_DELAY, DEPOSIT_BUFFER, DEPOSIT_BUFFER_REFILL_THRESHOLD,
+        fee_per_cost,
+        RUN_INTERVAL,
+        CONTINUE_DELAY,
+        DEPOSIT_BUFFER,
+        DEPOSIT_BUFFER_REFILL_THRESHOLD,
     )
 
     while True:
-
         # show announcer
         try:
             announcers = await rpc_client.announcer_show()
@@ -82,7 +84,7 @@ async def run_announcer():
             log.error("More than one approved announcer found")
         announcer = approved_announcers[0]
 
-        log.info("Found an approved announcer. Name: %s  LauncherID: %s", announcer['name'], announcer['launcher_id'])
+        log.info("Found an approved announcer. Name: %s  LauncherID: %s", announcer["name"], announcer["launcher_id"])
 
         # get Statutes
         try:
@@ -130,8 +132,8 @@ async def run_announcer():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        max_min_deposit = statutes_min_deposit # maximum min deposit in enacted bills and Statutes
-        min_price_ttl = statutes_price_ttl # minimum max price TTL in enacted bills and Statutes
+        max_min_deposit = statutes_min_deposit  # maximum min deposit in enacted bills and Statutes
+        min_price_ttl = statutes_price_ttl  # minimum max price TTL in enacted bills and Statutes
 
         # check for enacted bills (ie those that can no longer be vetoed)
         try:
@@ -153,14 +155,16 @@ async def run_announcer():
 
         error = False
         for c in bill_coins:
-
             try:
                 if c["bill"]["statute_index"] == STATUTE_ANNOUNCER_MINIMUM_DEPOSIT:
-                    log.info("Found bill to change announcer MIN_DEPOSIT to %s. Status: %s", c['bill']['value'],
-                             c['status']['status'])
+                    log.info(
+                        "Found bill to change announcer MIN_DEPOSIT to %s. Status: %s",
+                        c["bill"]["value"],
+                        c["status"]["status"],
+                    )
                     if (
-                            c["status"]["status"] in ['IN_IMPLEMENTATION_DELAY', 'IMPLEMENTABLE']
-                            and c["bill"]["value"] > max_min_deposit
+                        c["status"]["status"] in ["IN_IMPLEMENTATION_DELAY", "IMPLEMENTABLE"]
+                        and c["bill"]["value"] > max_min_deposit
                     ):
                         # update max_min_deposit
                         max_min_deposit = c["bill"]["value"]
@@ -179,11 +183,14 @@ async def run_announcer():
 
             try:
                 if c["bill"]["statute_index"] == STATUTE_ANNOUNCER_MAXIMUM_VALUE_TTL:
-                    log.info(f"Found bill to change announcer VALUE_TTL to %s. Status: %s", c['bill']['value'],
-                             c['status']['status'])
+                    log.info(
+                        "Found bill to change announcer VALUE_TTL to %s. Status: %s",
+                        c["bill"]["value"],
+                        c["status"]["status"],
+                    )
                     if (
-                            c["status"]["status"] in ['IN_IMPLEMENTATION_DELAY', 'IMPLEMENTABLE']
-                            and c["bill"]["value"] < min_price_ttl
+                        c["status"]["status"] in ["IN_IMPLEMENTATION_DELAY", "IMPLEMENTABLE"]
+                        and c["bill"]["value"] < min_price_ttl
                     ):
                         # update min_price_ttl
                         min_price_ttl = c["bill"]["value"]
@@ -192,7 +199,9 @@ async def run_announcer():
                 error = True
                 break
             except ValueError as err:
-                log.error("Failed to get info of bill for Statute ANNOUNCER_MAXIMUM_VALUE_TTL due to ValueError: %s", err)
+                log.error(
+                    "Failed to get info of bill for Statute ANNOUNCER_MAXIMUM_VALUE_TTL due to ValueError: %s", err
+                )
                 error = True
                 break
             except Exception as err:
@@ -209,8 +218,10 @@ async def run_announcer():
         new_min_deposit = None
         new_deposit = None
         req_min_deposit = max(max_min_deposit, statutes_min_deposit)
-        min_acceptable_deposit = req_min_deposit + int((DEPOSIT_BUFFER * DEPOSIT_BUFFER_REFILL_THRESHOLD) if fee_per_cost else 0)
-        if announcer["min_deposit"] != req_min_deposit or announcer['deposit'] < min_acceptable_deposit:
+        min_acceptable_deposit = (
+            req_min_deposit  # + int((DEPOSIT_BUFFER * DEPOSIT_BUFFER_REFILL_THRESHOLD) if fee_per_cost else 0)
+        )
+        if announcer["min_deposit"] != req_min_deposit or announcer["deposit"] < min_acceptable_deposit:
             new_min_deposit = req_min_deposit
             # check if we need to increase deposit
             if announcer["deposit"] < min_acceptable_deposit:
@@ -258,18 +269,22 @@ async def run_announcer():
         # configure announcer
         if new_price_ttl or new_min_deposit:
             log.info(
-                (f"Configuring announcer {announcer['name']}.")
-                + (f"  MIN_DEPOSIT: {announcer['min_deposit']} -> {new_min_deposit}" if new_min_deposit is not None else "")
+                ("Configuring announcer {announcer['name']}.")
+                + (
+                    f"  MIN_DEPOSIT: {announcer['min_deposit']} -> {new_min_deposit}"
+                    if new_min_deposit is not None
+                    else ""
+                )
                 + (f"  DEPOSIT: {announcer['deposit']} -> {new_deposit}" if new_deposit is not None else "")
                 + (f"  VALUE_TTL: {announcer['price_ttl']} -> {new_price_ttl}" if new_price_ttl is not None else "")
             )
+            await rpc_client.set_fee_per_cost()
             try:
                 response = await rpc_client.announcer_configure(
-                    COIN_NAME=announcer["name"],
+                    coin_name=announcer["name"],
                     min_deposit=new_min_deposit,
                     deposit=new_deposit,
                     ttl=new_price_ttl,
-                    units=True,
                 )
             except httpx.ReadTimeout as err:
                 log.error("Failed to configure announcer due to ReadTimeout: %s", err)
@@ -322,8 +337,8 @@ async def run_announcer():
         else:
             log.info(
                 "Leaving announcer configuration unchanged. MIN_DEPOSIT=%s  VALUE_TTL=%s",
-                announcer['min_deposit'],
-                announcer['price_ttl']
+                announcer["min_deposit"],
+                announcer["price_ttl"],
             )
 
         # sleep until next run

@@ -11,13 +11,18 @@ import logging.config
 
 #from chia.types.spend_bundle import SpendBundle
 
-from circuit_cli.client import CircuitRPCClient
+from circuit_cli.client import CircuitRPCClient, APIError
 
-
-if os.path.exists("log_conf.yaml"):
-    with open("log_conf.yaml", "r") as f:
-        config = yaml.safe_load(f)
-        logging.config.dictConfig(config)
+# Import dynamic logging configuration
+try:
+    from logging_config import setup_logging
+    setup_logging("statutes_update_bot")
+except ImportError:
+    # Fallback to static configuration if logging_config module is not available
+    if os.path.exists("log_conf.yaml"):
+        with open("log_conf.yaml", "r") as f:
+            config = yaml.safe_load(f)
+            logging.config.dictConfig(config)
 
 log = logging.getLogger("statutes_update_bot")
 
@@ -60,25 +65,28 @@ async def run_statutes():
     if not args.private_key:
         raise ValueError("No private key provided")
 
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost)
-
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data)
     while True:
-
+        await rpc_client.set_fee_per_cost()
         # Update Statutes price
         log.info("Updating Statutes Price")
 
         try:
             data = await rpc_client.statutes_update()
         except httpx.ReadTimeout as err:
-            log.error("Failed to update Statutes Price due to ReadTimeout: %s", err)
+            log.exception("Failed to update Statutes Price due to ReadTimeout")
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+        except APIError:
+            log.exception("Failed to update Statutes Price due to APIError")
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
-            log.error("Failed to update Statutes Price due to ValueError: %s", err)
+            log.exception("Failed to update Statutes Price due to ValueError")
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
-            log.error("Failed to update Statutes Price: %s", err)
+            log.exception("Failed to update Statutes Price: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
