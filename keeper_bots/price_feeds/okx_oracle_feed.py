@@ -40,7 +40,6 @@ class Oracle:
         self.last_trade_ts = 0
         self.last_price = float("nan")
         self.usdt_usd_price = float("nan")
-        self.subscribers = []  # List of asyncio.Queue for event subscribers
         self.start_time = None  # Will be set when first connected
         
         # Create subscription channels based on provided trading pairs
@@ -53,6 +52,45 @@ class Oracle:
     def set_usdt_usd_price(self, price):
         if price and price > 0:
             self.usdt_usd_price = price
+
+    def update_parameters(self, window_sec=None, startup_window_sec=None, min_notional=None):
+        """
+        Update Oracle parameters dynamically.
+        
+        Args:
+            window_sec: New time window for trades in seconds (optional)
+            startup_window_sec: New startup window length in seconds (optional)
+            min_notional: New minimum notional value for trades (optional)
+        """
+        # Validate parameters
+        if window_sec is not None:
+            if not isinstance(window_sec, (int, float)) or window_sec <= 0:
+                raise ValueError(f"window_sec must be a positive number, got: {window_sec}")
+            
+            old_window = self.window
+            self.window = window_sec
+            
+            # Clean up trades outside the new window if it's smaller
+            if window_sec < old_window:
+                now = int(time.time() * 1000)
+                cutoff = now - self.window * 1000
+                # Remove trades older than new window
+                original_count = len(self.trades)
+                self.trades = [trade for trade in self.trades if trade[0] >= cutoff]
+                removed_count = original_count - len(self.trades)
+                if removed_count > 0:
+                    logging.info("Window reduced from %ds to %ds, removed %d old trades", 
+                               old_window, window_sec, removed_count)
+        
+        if startup_window_sec is not None:
+            if not isinstance(startup_window_sec, (int, float)) or startup_window_sec < 0:
+                raise ValueError(f"startup_window_sec must be a non-negative number, got: {startup_window_sec}")
+            self.startup_window = startup_window_sec
+        
+        if min_notional is not None:
+            if not isinstance(min_notional, (int, float)) or min_notional < 0:
+                raise ValueError(f"min_notional must be a non-negative number, got: {min_notional}")
+            self.min_notional = min_notional
 
     def add_trade(self, instId, ts_ms, px, qty):
         # Convert price to USD if necessary
@@ -110,35 +148,6 @@ class Oracle:
         meta["ts"] = now
         return price, meta
 
-    def subscribe(self):
-        """Allows a consumer to subscribe to price updates.
-
-        Returns an asyncio.Queue that will receive price update events.
-        """
-        q = asyncio.Queue()
-        self.subscribers.append(q)
-        return q
-
-    def unsubscribe(self, q: asyncio.Queue):
-        """Removes a subscriber queue."""
-        try:
-            self.subscribers.remove(q)
-        except ValueError:
-            # This can happen if a task is cancelled and tries to unsubscribe
-            # after the list has already been cleared, for example.
-            pass
-
-    async def publish_update(self, price, meta):
-        """Publishes the latest price update to all subscribers."""
-        event = {
-            "type": "price_update",
-            "price": price,
-            "meta": meta,
-            "usdt_usd_price": self.usdt_usd_price,
-        }
-        for q in self.subscribers:
-            await q.put(event)
-
 
 async def usdt_price_fetcher(oracle: Oracle):
     """Fetches USDT-USD price from Coinbase and updates the oracle."""
@@ -175,7 +184,7 @@ async def usdt_price_fetcher(oracle: Oracle):
         delay = min(max_delay, delay * 1.5 + random.uniform(0, 1))  # Exponential backoff with jitter
 
 
-async def okx_ws(oracle: Oracle):
+async def okx_ws(oracle: Oracle, feed_instance=None):
     while True:
         try:
             async with aiohttp.ClientSession() as sess:
@@ -227,18 +236,24 @@ async def okx_ws(oracle: Oracle):
 
                                     if instId.endswith("-USDT"):
                                         if not math.isnan(oracle.usdt_usd_price):
-                                            book_mids[instId] = (
-                                                mid * oracle.usdt_usd_price,
-                                                book_top_vol,
-                                            )
+                                            mid_usd = mid * oracle.usdt_usd_price
+                                            book_mids[instId] = (mid_usd, book_top_vol)
+                                            # Also update feed_instance book_mids if available
+                                            if feed_instance is not None:
+                                                feed_instance.book_mids[instId] = (mid_usd, book_top_vol)
                                         elif instId in book_mids:
                                             # remove stale price if conversion not possible
                                             del book_mids[instId]
+                                            if feed_instance is not None and instId in feed_instance.book_mids:
+                                                del feed_instance.book_mids[instId]
                                     else:  # -USD
                                         book_mids[instId] = (mid, book_top_vol)
-                        # publish every 1s
+                                        # Also update feed_instance book_mids if available
+                                        if feed_instance is not None:
+                                            feed_instance.book_mids[instId] = (mid, book_top_vol)
+                        # publish every 10s
                         now = time.time()
-                        if now - oracle.last_pub >= 1.0:
+                        if now - oracle.last_pub >= 10:
                             fallback_mid = None
                             if book_mids:
                                 # Calculate a volume-weighted mid-price for fallback
@@ -252,9 +267,6 @@ async def okx_ws(oracle: Oracle):
                                     if prices:
                                         fallback_mid = statistics.mean(prices)
                             price, meta = oracle.compute(fallback_mid=fallback_mid)
-
-                            # Publish event to any subscribers
-                            await oracle.publish_update(price, meta)
 
                             price_str = (
                                 f"{price:.2f}" if isinstance(price, (int, float)) and not math.isnan(price) else "None"
@@ -276,24 +288,6 @@ async def okx_ws(oracle: Oracle):
             await asyncio.sleep(2 + 3 * random.random())
 
 
-async def price_subscriber(oracle: Oracle):
-    """An example task that subscribes to and prints price updates."""
-    q = oracle.subscribe()
-    logging.info("[Subscriber] Task started, waiting for price updates.")
-    try:
-        while True:
-            update = await q.get()
-            price = update.get("price")
-            price_str = f"{price:.2f}" if isinstance(price, (int, float)) and not math.isnan(price) else "None"
-            logging.info("[Subscriber] Received price update: %s", price_str)
-            q.task_done()  # Acknowledge the item has been processed
-    except asyncio.CancelledError:
-        logging.info("[Subscriber] Task cancelled.")
-    finally:
-        oracle.unsubscribe(q)
-        logging.info("[Subscriber] Unsubscribed.")
-
-
 class OkxOracleFeed:
     """
     A wrapper class that provides a similar interface to OkxFeed for integration 
@@ -311,12 +305,13 @@ class OkxOracleFeed:
         """
         self.oracle = Oracle(trading_pairs, window_sec, startup_window_sec, min_notional)
         self._tasks = []
+        self.book_mids = {}  # Store current book mid prices for fallback
         
     async def __aenter__(self):
         """Start the feed tasks."""
         logging.info("Starting OKX Oracle Feed...")
         self._tasks = [
-            asyncio.create_task(okx_ws(self.oracle)),
+            asyncio.create_task(okx_ws(self.oracle, self)),
             asyncio.create_task(usdt_price_fetcher(self.oracle))
         ]
         # Give it a moment to connect and start receiving data
@@ -332,8 +327,35 @@ class OkxOracleFeed:
         
     async def get_price(self):
         """Get the current price from the oracle."""
-        price, meta = self.oracle.compute()
+        # Calculate volume-weighted fallback mid-price from current orderbook data
+        fallback_mid = None
+        if self.book_mids:
+            # Calculate a volume-weighted mid-price for fallback
+            total_book_volume = sum(vol for _, vol in self.book_mids.values())
+            if total_book_volume > 0:
+                weighted_sum = sum(px * vol for px, vol in self.book_mids.values())
+                fallback_mid = weighted_sum / total_book_volume
+            else:
+                # Fallback to simple average if no volume
+                prices = [px for px, _ in self.book_mids.values()]
+                if prices:
+                    fallback_mid = statistics.mean(prices)
+        
+        price, meta = self.oracle.compute(fallback_mid=fallback_mid)
         return price
+
+    def update_parameters(self, window_sec=None, startup_window_sec=None, min_notional=None):
+        """
+        Update feed parameters dynamically.
+        
+        Args:
+            window_sec: New time window for trades in seconds (optional)
+            startup_window_sec: New startup window length in seconds (optional)
+            min_notional: New minimum notional value for trades (optional)
+        """
+        self.oracle.update_parameters(window_sec, startup_window_sec, min_notional)
+        logging.info("Updated OkxOracleFeed parameters: window_sec=%s, startup_window_sec=%s, min_notional=%s",
+                    self.oracle.window, self.oracle.startup_window, self.oracle.min_notional)
 
 
 async def main():
@@ -341,17 +363,9 @@ async def main():
     trading_pairs = ["XCH-USDT", "XCH-USD"]
     oracle = Oracle(trading_pairs)
     
-    # Create a subscriber task to demonstrate event handling
-    subscriber_task = asyncio.create_task(price_subscriber(oracle))
-
+    # Run the core oracle tasks
     core_tasks = asyncio.gather(okx_ws(oracle), usdt_price_fetcher(oracle))
-
-    try:
-        await core_tasks
-    finally:
-        # On exit, ensure the subscriber task is cancelled and cleaned up
-        subscriber_task.cancel()
-        await asyncio.gather(subscriber_task, return_exceptions=True)
+    await core_tasks
 
 
 if __name__ == "__main__":

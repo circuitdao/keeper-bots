@@ -13,7 +13,7 @@ from chia_rs import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
 
-from keeper_bots.okx_feed import OkxFeed
+from keeper_bots.price_feeds.okx_oracle_feed import OkxOracleFeed
 from keeper_bots.utils import set_dotenv_variable
 
 # Import dynamic logging configuration
@@ -57,8 +57,10 @@ async def run_announcer():
         raise ValueError("No URL found at which Circuit RPC server can be reached")
     if not private_key:
         raise ValueError("No master private key found")
-    if startup_window > average_window:
-        raise ValueError("Start-up window must not be longer than averaging window")
+    # Note: Removed artificial constraint that prevented startup_window > average_window
+    # These parameters serve different purposes and can be configured independently:
+    # - startup_window: Controls WHEN Oracle starts returning valid prices
+    # - average_window: Controls WHICH trades are included in VWAP calculation
 
     log.info("Announcer update bot started: %s", rpc_url)
     log.info(
@@ -77,20 +79,17 @@ async def run_announcer():
 
     rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
     if "testnet" in rpc_url or "localhost" in rpc_url:
-        # Connect to OKX price feed
         sym = "XRP-USDT"
-        uquote = "USD"  # ultimate quote currency
     else:
-        # Connect to OKX price feed
         sym = "XCH-USDT"
-        uquote = "USD"  # ultimate quote currency
 
-    feed = OkxFeed(
-        sym, uquote,
-        os.getenv("OKX_URL"), # Base URL of the OKX API
-        startup_window_length=startup_window,
-        window_length=average_window,
-        verbose=False
+    # OkxOracleFeed expects trading_pairs as a list and window_sec parameter
+    trading_pairs = [sym]
+    feed = OkxOracleFeed(
+        trading_pairs=trading_pairs,
+        window_sec=average_window,  # Use average_window (window_length) as the main window
+        startup_window_sec=startup_window,  # Use startup_window for startup period
+        min_notional=10
     )
 
     async with feed as okx_feed:
@@ -138,14 +137,27 @@ async def run_announcer():
                 if UPDATE_THRESHOLD_BPS != update_threshold_bps:
                     log.info("Updating update threshold: %s -> %s", UPDATE_THRESHOLD_BPS, update_threshold_bps)
                     UPDATE_THRESHOLD_BPS = update_threshold_bps
-                startup_window = int(os.getenv("ANNOUNCER_UPDATE_STARTUP_WINDOW"))
-                if feed.startup_window_length.total_seconds() != startup_window:
-                    log.info("Updating startup window: %s -> %s", feed.startup_window_length.total_seconds(), startup_window)
-                    feed.startup_window_length = timedelta(seconds=startup_window)
-                average_window = int(os.getenv("ANNOUNCER_UPDATE_AVERAGE_WINDOW"))
-                if feed.window_length.total_seconds() != average_window:
-                    log.info("Updating average window: %s -> %s", feed.window_length.total_seconds(), average_window)
-                    feed.window_length = timedelta(seconds=average_window)
+                # Update window parameters dynamically using OkxOracleFeed's new dynamic parameter support
+                new_startup_window = int(os.getenv("ANNOUNCER_UPDATE_STARTUP_WINDOW"))
+                new_average_window = int(os.getenv("ANNOUNCER_UPDATE_AVERAGE_WINDOW"))
+                
+                # Check if window parameters have changed and update if necessary
+                if startup_window != new_startup_window or average_window != new_average_window:
+                    log.info("Updating window parameters: startup_window %s -> %s, average_window %s -> %s", 
+                            startup_window, new_startup_window, average_window, new_average_window)
+                    try:
+                        okx_feed.update_parameters(
+                            window_sec=new_average_window,
+                            startup_window_sec=new_startup_window
+                        )
+                        startup_window = new_startup_window
+                        average_window = new_average_window
+                    except Exception as err:
+                        log.error("Failed to update window parameters: %s", str(err))
+                else:
+                    # Parameters haven't changed, just update local variables for consistency
+                    startup_window = new_startup_window
+                    average_window = new_average_window
 
             # get Statutes
             try:
@@ -253,6 +265,8 @@ async def run_announcer():
             log.info("Updating announcer. Setting price to %.2f XCH/USD", price / PRICE_PRECISION)
 
             try:
+                # get the latest fee per cost
+                await rpc_client.set_fee_per_cost()
                 response = await rpc_client.announcer_update(price, coin_name=announcer["name"])
             except httpx.ReadTimeout as err:
                 log.error("Failed to update announcer due to ReadTimeout: %s", err)
