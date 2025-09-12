@@ -96,11 +96,15 @@ class OkxOrderBook:
             else:
                 raise Exception(f'Unknown action {message["action"]} returned in callback')
 
-    def price(self, direction: str, amount: int, bq_toggle: bool) -> tuple[Optional[float], float]:
-        """Price at which an amount of base currency can be bought or sold
+    def price(self, direction: str, amount: int, bq_toggle: bool) -> tuple[float, float, float]:
+        """Price at which an amount of currency can be bought or sold
 
-        If order book isn't deep enough to cover requested amount, max amount available is used.
-        Returns a tuple (price, amount).
+        Returns average price and max/min price at which amount can be bought or sold and corresponding amount.
+
+        If order book isn't deep enough to cover requested amount, prices and amount returned reflect
+        all liquidity in order book being used up.
+
+        Note: size and amount values are in currency given by bq_toggle. volume is always in base currency.
 
         Arguments:
         direction - "buy" or "sell"
@@ -114,9 +118,11 @@ class OkxOrderBook:
             return float(data[0])
 
         def volume_to_size(volume, price, bq_toggle):
+            """Return amount of base or quote currency (depending on bq_toggle) equivalent to given base currency volume."""
             return volume if bq_toggle else price * volume
 
         def size_to_volume(size, price, bq_toggle):
+            """Return amount of base currency equivalent to given base or quote currency (depending on bq_toggle) size."""
             return size if bq_toggle else size / price
 
         size = 0 # In same currency as amount (as given by bq_toggle)
@@ -131,8 +137,9 @@ class OkxOrderBook:
         reverse = True if side == "bids" else False
         self.book[side] = dict(sorted(self.book[side].items(), key=dicttofloat, reverse=reverse))
 
-        #cnt = 0
+        cnt = 0
         #prev_d: int
+        last_price = None
         for d, v in self.book[side].items():
 
             """ Check that order book side is ordered (to be deleted)
@@ -145,14 +152,15 @@ class OkxOrderBook:
             cnt += 1
             """
 
+            #cnt += 1
             level = float(d)
-            volume = min(float(v), size_to_volume(amount - size, level, bq_toggle))
+            volume = min(float(v), size_to_volume(amount - size, level, bq_toggle)) # NOTE: volume is always base currency
 
             #print(f"Level no. {cnt}")
-            #print(f"  Price:  {price}")
-            #print(f"  Size:   {size}")
-            #print(f"  Level:  {level}")
-            #print(f"  Volume: {volume}")
+            #print(f"  Average price so far:  {price}")
+            #print(f"  Size so far:   {size}/{amount}")
+            #print(f"  Level price:  {level}")
+            #print(f"  Level volume taken: {volume}")
 
             if price is None:
                 price = level
@@ -160,10 +168,12 @@ class OkxOrderBook:
             else:
                 price = (price * size_to_volume(size, price, bq_toggle) + level * volume) / (size_to_volume(size, price, bq_toggle) + volume)
                 size += volume_to_size(volume, level, bq_toggle)
-            if volume < float(v):
+            #if volume < float(v):
+            #    break
+            if size >= amount:
                 break
 
-        return (price, size)
+        return price, level, size
 
 
 """
