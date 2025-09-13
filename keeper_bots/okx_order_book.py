@@ -96,6 +96,11 @@ class OkxOrderBook:
             else:
                 raise Exception(f'Unknown action {message["action"]} returned in callback')
 
+    def mid_price(self) -> float:
+        lowest_ask = min([float(key) for key in self.book["asks"].keys()])
+        highest_bid = max([float(key) for key in self.book["bids"].keys()])
+        return (lowest_ask + highest_bid) / 2
+
     def price(self, direction: str, amount: int, bq_toggle: bool) -> tuple[float, float, float]:
         """Price at which an amount of currency can be bought or sold
 
