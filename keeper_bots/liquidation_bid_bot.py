@@ -38,6 +38,10 @@ class TradeEnv(Enum):
     LIVE = "0"
     DEMO = "1"
 
+class BidFail(Enum):
+    NONE = 0
+    NOT_POSSIBLE = 1
+    NOT_PROFITABLE = 2
 
 if os.path.exists("log_conf.yaml"):
     with open("log_conf.yaml", "r") as f:
@@ -73,6 +77,260 @@ rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 def get_okx_symbols(base_symbol, quote_symbol):
     """Return OKX symbols for market and price"""
     return f"{base_symbol}-{quote_symbol}", f"{base_symbol}/{quote_symbol}"
+
+async def liquidate_vault(
+        vault_name, rpc_client, okx_order_book, tradeAPI, accountAPI, base_decimals, price_decimals,
+        collateral_symbol, stablecoin_symbol, proxy_symbol, market_symbol, price_symbol,
+) -> BidFail:
+    log.info("Liquidating vault %s", vault_name)
+    # get vault collateral, debt and max byc amount to bid
+    try:
+        log.info("Getting bid info for vault %s", vault_name)
+        bid_info = await rpc_client.upkeep_vaults_bid(vault_name, info=True)
+    except httpx.HTTPStatusError as err:
+        log.error("Failed to get liquidation auction bid info due to HTTPStatusError: %s", err)
+        raise
+    except httpx.ReadTimeout as err:
+        log.error("Failed to get liquidation auction bid info due to ReadTimeout: %s", err)
+        raise
+    except ValueError as err:
+        log.error("Failed to get liquidation auction bid info due to ValueError: %s", err)
+        raise
+    except Exception as err:
+        log.error("Failed to get liquidation auction bid info: %s", err)
+        raise
+
+    if not bid_info["action_executable"]:
+        log.info("Cannot place bid in liquidation auction for vault %s", vault_name) # LATER: provide additional info on why not
+        return BidFail.NOT_POSSIBLE
+
+    auction_price = bid_info["auction_price"]
+    collateral = bid_info["collateral"]
+    debt = bid_info["debt"]
+    max_byc_amount_to_bid = bid_info["max_byc_amount_to_bid"]
+    leftover_collateral = bid_info["leftover_collateral"]
+
+    if debt > max_byc_amount_to_bid and not leftover_collateral == 0:
+        # this should never happen! bid should use up all collateral if max amount to bid is less than debt
+        log.warning(
+            "There is leftover collateral (%s) despite max amount to bid being less than debt (%s < %s)",
+            leftover_collateral, max_byc_amount_to_bid, debt
+        )
+
+    log.info(
+        "Vault %s has collateral=%s %s  debt=%s m%s  max amount to bid=%s m%s",
+        vault_name, collateral/MOJOS_PER_XCH, collateral_symbol, debt, stablecoin_symbol, max_byc_amount_to_bid, stablecoin_symbol
+    )
+
+    # get wallet byc balance
+    try:
+        balances = await rpc_client.wallet_balances()
+    except httpx.HTTPStatusError as err:
+        log.error("Failed to get wallet balances due to HTTPStatusError: %s", err)
+        raise
+    except httpx.ReadTimeout as err:
+        log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
+        raise
+    except ValueError as err:
+        log.error("Failed to get wallet balances due to ValueError: %s", err)
+        raise
+    except Exception as err:
+        log.error("Failed to get wallet balances: %s", err)
+        raise
+
+    available_byc_amount = balances["byc"]
+
+    # get OKX xch balance
+    try:
+        response = await accountAPI.get_account_balance(
+            ccy=collateral_symbol,
+        )
+    except Exception as err:
+        # keep trying in case of error as we need to close our position
+        log.error("Failed to get OKX account balance")
+        raise
+
+    if not response["code"] == "0":
+        # Failed to receive OKX account balance
+        raise ValueError("Failed to get OKX account balance. Response: %s", json.dumps(response))
+    if not len(response["data"]) == 1:
+        raise ValueError("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
+    if not len(response["data"][0]["details"]) == 1:
+        raise ValueError("Unexpected length of response['data'][0]['details'] list. Expected 1, got %s. Response: %s", len(response["data"][0]["details"]), json.dumps(response))
+
+    available_xch_balance = float(response["data"][0]["details"][0]["cashBal"]) # in XCH
+
+    log.info("Got OKX account balance: %s %s", available_xch_balance, collateral_symbol)
+
+    log.info(
+        "Vault %s has: collateral=%s %s  debt=%s %s  available amount=%s %s  max bid amount=%s %s",
+        vault_name, collateral/MOJOS_PER_XCH, collateral_symbol, debt/MCAT, stablecoin_symbol,
+        available_byc_amount/MCAT, stablecoin_symbol, max_byc_amount_to_bid/MCAT, stablecoin_symbol
+    )
+
+    bid_amount = min(
+        available_byc_amount, # don't bid more than available in wallet
+        max_byc_amount_to_bid, # don't bid more than necessary according to vault state (amount of debt & collateral)
+        int(available_xch_balance * auction_price * 1000 / PRICE_PRECISION), # don't bid more than can be hedged
+    )
+    if MAX_BID_AMOUNT is not None:
+        bid_amount = min(bid_amount, MAX_BID_AMOUNT)
+
+    try:
+        log.info("Getting bid info for vault %s with bid amount %s", vault_name, bid_amount)
+        bid_info = await rpc_client.upkeep_vaults_bid(vault_name, amount=bid_amount, info=True)
+    except httpx.HTTPStatusError as err:
+        log.error("Failed to get liquidation auction bid info for bid amount %s due to HTTPStatusError: %s", bid_amount, err)
+        raise
+    except httpx.ReadTimeout as err:
+        log.error("Failed to get liquidation auction bid info for bid amount %s due to ReadTimeout: %s", bid_amount, err)
+        raise
+    except ValueError as err:
+        log.error("Failed to get liquidation auction bid info for bid amount %s due to ValueError: %s", bid_amount, err)
+        raise
+    except Exception as err:
+        log.error("Failed to liquidation auction bid info for bid amount %s: %s", bid_amount, err)
+        raise
+
+    if not bid_info["action_executable"]:
+        min_byc_amount_to_bid = bid_info["min_byc_amount_to_bid"]
+        if available_byc_amount < min_byc_amount_to_bid:
+            log.info(
+                "Cannot place bid of amount %s m%s in liquidation auction for vault %s: Amount available in wallet is less than min amount to bid (%s < %s)",
+                bid_amount, stablecoin_symbol, vault_name, available_byc_amount, min_byc_amount_to_bid
+            )
+        else:
+            log.info("Cannot place bid of amount %s m%s in liquidation auction for vault %s", bid_amount, stablecoin_symbol, vault_name)
+        return BidFail.NOT_POSSIBLE
+
+    collateral_to_receive = bid_info["collateral_to_receive"]/MOJOS_PER_XCH
+    leftover_collateral = bid_info["leftover_collateral"]/MOJOS_PER_XCH
+
+    log.info(
+        "Can buy %.12f %s at %.2f %s for %.3f %s in liquidation auction, leaving %.12f of %.12f %s in collateral",
+        collateral_to_receive, collateral_symbol, auction_price/PRICE_PRECISION, f"{collateral_symbol}/{stablecoin_symbol}",
+        bid_amount/MCAT, stablecoin_symbol, leftover_collateral, collateral/MOJOS_PER_XCH, collateral_symbol,
+    )
+
+    collateral_to_sell = min(collateral_to_receive, available_xch_balance)#TODO: take into account OKX fees # including available_xch_balance again here due to potential rounding errors in bid_amount calculation
+
+    hedge_price, _, hedge_volume = okx_order_book.price("sell", collateral_to_sell, True)
+    hedge_amount = hedge_price * hedge_volume
+    log.info(f"Can sell {collateral_to_receive:.12f} {collateral_symbol} at {hedge_price} {price_symbol} for {hedge_amount} {proxy_symbol} (hedge amount) on OKX")
+
+    if hedge_amount <= bid_amount * (1 + MARGIN)/MCAT:
+        log.info(f"Hedge amount does not exceed {(1+MARGIN)*100:.1f}% of bid amount ({hedge_amount} {stablecoin_symbol} <= {bid_amount * (1+MARGIN)/MCAT} {stablecoin_symbol}). Risk too high. Not placing a bid in liquidation auction")
+        return BidFail.NOT_PROFITABLE
+    else:
+        log.info(f"Hedge amount is greater than {(1+MARGIN)*100:.1f}% of bid amount ({hedge_amount} {stablecoin_symbol} > {bid_amount * (1+MARGIN)/MCAT} {stablecoin_symbol}. Placing bid of {bid_amount/MCAT:.3f} {stablecoin_symbol} in liquidation auction")
+        # bid for collateral
+        try:
+            response = await rpc_client.upkeep_vaults_bid(vault_name, bid_amount)
+        except httpx.HTTPStatusError as err:
+            log.error("Failed to place liquidation auction bid for vault %s due to HTTPStatusError: %s", vault_name, err)
+            raise
+        except httpx.ReadTimeout as err:
+            log.error("Failed to place liquidation auction bid for vault %s due to ReadTimeout: %s", vault_name, err)
+            raise
+        except ValueError as err:
+            log.error("Failed to place liquidation auction bid for vault %s due to ValueError: %s", vault_name, err)
+            raise
+        except Exception as err:
+            log.error("Failed to place liquidation auction bid for vault %s: %s", vault_name, err)
+            raise
+
+        if not response["status"] == "success":
+            raise ValueError("Failed to place liquidation auction bid for vault %. Response code: %s", vault_name, response["success"])
+
+        # hedge on OKX
+        retry_delay = 2
+        max_retries = 30
+        cnt = 0
+        while cnt < max_retries:
+            cnt += 1
+            log.info("Attempt no. %s/%s to place market sell order for %s %s on OKX", cnt, max_retries, hedge_volume, collateral_symbol)
+            try:
+                response = await tradeAPI.place_order(
+                    instId=market_symbol,
+                    tdMode='cash',
+                    side='sell',
+                    ordType='market',
+                    tgtCcy='base_ccy', # currency in which size is measured
+                    sz="{:.{}f}".format(hedge_volume, base_decimals),
+                )
+            except Exception as err:
+                # keep trying in case of error as we need to close our position
+                log.error("Failed to place market sell order on OKX: %s. Retrying in %s seconds", str(err), retry_delay)
+                await asyncio.sleep(retry_delay)
+                continue
+
+            if not response["code"] == "0":
+                # OKX failed to place order
+                log.error("Failed to place market sell order on OKX. Response: %s", json.dumps(response))
+                await asyncio.sleep(retry_delay)
+                continue
+            if not len(response["data"]) == 1:
+                log.warning("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
+
+            ordId = response["data"][0]["ordId"]
+            log.info("Successfully placed market sell order on OKX. OrdId: %s", ordId) # Response: %s", json.dumps(response))
+            break
+
+        # check that we sold expected amount and calculate PnL
+        retry_delay = 2
+        max_retries = 5
+        cnt = 0
+        while cnt < max_retries:
+            cnt += 1
+            log.info("Attempt no. %s/%s to get order info for ordID %s", cnt, max_retries, ordId)
+            try:
+                response = await tradeAPI.get_order(instId=market_symbol, ordId=ordId)
+            except Exception as err:
+                # keep trying in case of error as we need to close our position
+                log.error("Failed to get OKX order ordId %s", ordId)
+                await asyncio.sleep(retry_delay)
+                continue
+
+            if not response["code"] == "0":
+                # failed to get order
+                log.error("Failed to get OKX order ordId %s. Response: %s", ordId, json.dumps(response))
+                await asyncio.sleep(retry_delay)
+                continue
+            if not len(response["data"]) == 1:
+                log.warning("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
+
+            state = response["data"][0]["state"]
+            total_fill_volume = float(response["data"][0]["accFillSz"]) # given in base currency
+            last_fill_price = float(response["data"][0]["fillPx"])
+            avg_fill_price = float(response["data"][0]["avgPx"]) if response["data"][0]["avgPx"] != "" else None
+            okx_fee = float(response["data"][0]["fee"]) # accumulated fee and rebate in quote currency
+            fee_ccy = response["data"][0]["feeCcy"]
+            if not state == "filled":
+                log.warning("Market sell order was not filled. State: %s", state)
+            if not fee_ccy == proxy_symbol:
+                log.warning("Market sell order fees were charged in %s, expected %s", fee_ccy, proxy_symbol)
+            if not abs(total_fill_volume - hedge_volume) < 10**(-base_decimals):
+                log.warning("Filled volume does not equal hedge volume (%s != %s)", total_fill_volume, hedge_volume)
+
+            log.info(
+                "Market sell order was filled. Volume: %s %s. Avg price: %s %s. Lowest price: %s %s",
+                total_fill_volume, collateral_symbol, avg_fill_price, price_symbol, last_fill_price, price_symbol
+            )
+
+            quote_delta = bid_amount/MCAT - total_fill_volume * avg_fill_price
+            base_delta = collateral_to_receive - total_fill_volume + okx_fee # LATER: add on-chain tx fee
+            pnl = quote_delta + base_delta * okx_order_book.mid_price()
+
+            log.info("PnL: %.2f USD. Remaining %s position: %.3f. Remaining stablecoin position: %.3f", pnl, collateral_symbol, base_delta, quote_delta)
+            break
+
+        return BidFail.NONE
+        # reconcile balances
+        # LATER: OKX may adjust size of market order if user doesn't have enough funds.
+        #   See banAmend parameter: https://my.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order
+
+        # recycle capital
+        # LATER: USDT -> USDC --transfer to Base-> USDC.b --warp.green-> wUSDC.b -> BYC
 
 
 async def run_liquidation_bid_bot():
@@ -157,272 +415,35 @@ async def run_liquidation_bid_bot():
 
         log.info("%s vaults in liquidation. Bidding in liquidation auctions", len(vaults_in_liquidation))
 
-        auction_price_too_high = 0
-        bid_not_possible = 0
-        failed_to_bid = 0
+        liquidation_tasks = []
         for vault in vaults_in_liquidation:
-
-            # get vault collateral, debt and max byc amount to bid
-            try:
-                vault_name = vault["name"]
-                log.info("Getting bid info for vault %s", vault_name)
-                bid_info = await rpc_client.upkeep_vaults_bid(vault_name, info=True)
-            except httpx.HTTPStatusError as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info due to HTTPStatusError: %s", err)
-                continue
-            except httpx.ReadTimeout as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info due to ReadTimeout: %s", err)
-                continue
-            except ValueError as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info due to ValueError: %s", err)
-                continue
-            except Exception as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info: %s", err)
-                continue
-
-            if not bid_info["action_executable"]:
-                bid_not_possible += 1
-                log.info("Cannot place bid in liquidation auction for vault %s", vault_name) # LATER: provide additional info on why not
-                continue
-
-            auction_price = bid_info["auction_price"]
-            collateral = bid_info["collateral"]
-            debt = bid_info["debt"]
-            max_byc_amount_to_bid = bid_info["max_byc_amount_to_bid"]
-            leftover_collateral = bid_info["leftover_collateral"]
-
-            if debt > max_byc_amount_to_bid and not leftover_collateral == 0:
-                # this should never happen! bid should use up all collateral if max amount to bid is less than debt
-                log.warning(
-                    "There is leftover collateral (%s) despite max amount to bid being less than debt (%s < %s)",
-                    leftover_collateral, max_byc_amount_to_bid, debt
+            task = asyncio.create_task(
+                liquidate_vault(
+                    vault["name"], rpc_client, okx_order_book, tradeAPI, accountAPI, base_decimals, price_decimals,
+                    collateral_symbol, stablecoin_symbol, proxy_symbol, market_symbol, price_symbol,
                 )
-
-            log.info(
-                "Vault %s has collateral=%s %s  debt=%s m%s  max amount to bid=%s m%s",
-                vault_name, collateral/MOJOS_PER_XCH, collateral_symbol, debt, stablecoin_symbol, max_byc_amount_to_bid, stablecoin_symbol
             )
+            liquidation_tasks.append(task)
 
-            # get wallet byc balance
-            try:
-                balances = await rpc_client.wallet_balances()
-            except httpx.HTTPStatusError as err:
-                failed_to_bid += 1
-                log.error("Failed to get wallet balances due to HTTPStatusError: %s", err)
-                continue
-            except httpx.ReadTimeout as err:
-                failed_to_bid += 1
-                log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
-                continue
-            except ValueError as err:
-                failed_to_bid += 1
-                log.error("Failed to get wallet balances due to ValueError: %s", err)
-                continue
-            except Exception as err:
-                failed_to_bid += 1
-                log.error("Failed to get wallet balances: %s", err)
-                continue
+        bid_failed = 0
+        bid_not_possible = 0
+        bid_not_profitable = 0
 
-            available_byc_amount = balances["byc"]
-
-            # get OKX xch balance
-            try:
-                response = await accountAPI.get_account_balance(
-                    ccy=collateral_symbol,
-                )
-            except Exception as err:
-                # keep trying in case of error as we need to close our position
-                failed_to_bid += 1
-                log.error("Failed to get OKX account balance")
-                continue
-
-            if not response["code"] == "0":
-                # Failed to receive OKX account balance
-                log.error("Failed to get OKX account balance. Response: %s", json.dumps(response))
-                continue
-            if not len(response["data"]) == 1:
-                log.error("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
-                continue
-            if not len(response["data"][0]["details"]) == 1:
-                log.error("Unexpected length of response['data'][0]['details'] list. Expected 1, got %s. Response: %s", len(response["data"][0]["details"]), json.dumps(response))
-                continue
-
-            available_xch_balance = float(response["data"][0]["details"][0]["cashBal"]) # in XCH
-
-            log.info("Got OKX account balance: %s %s. Response: %s", available_xch_balance, collateral_symbol, json.dumps(response))
-
-            log.info(
-                "Vault %s has collateral=%s %s  debt=%s %s available amount: %s %s. Max bid amount: %s %s",
-                vault_name, collateral/MOJOS_PER_XCH, collateral_symbol, debt/MCAT, stablecoin_symbol,
-                available_byc_amount/MCAT, stablecoin_symbol, max_byc_amount_to_bid/MCAT, stablecoin_symbol
-            )
-
-            bid_amount = min(
-                available_byc_amount, # don't bid more than available in wallet
-                max_byc_amount_to_bid, # don't bid more than necessary according to vault state (amount of debt & collateral)
-                int(available_xch_balance * auction_price * 1000 / PRICE_PRECISION), # don't bid more than can be hedged
-            )
-            if MAX_BID_AMOUNT is not None:
-                bid_amount = min(bid_amount, MAX_BID_AMOUNT)
-
-            try:
-                vault_name = vault["name"]
-                log.info("Getting bid info for vault %s with bid amount %s", vault_name, bid_amount)
-                bid_info = await rpc_client.upkeep_vaults_bid(vault_name, amount=bid_amount, info=True)
-            except httpx.HTTPStatusError as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info for bid amount %s due to HTTPStatusError: %s", bid_amount, err)
-                continue
-            except httpx.ReadTimeout as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info for bid amount %s due to ReadTimeout: %s", bid_amount, err)
-                continue
-            except ValueError as err:
-                failed_to_bid += 1
-                log.error("Failed to get liquidation auction bid info for bid amount %s due to ValueError: %s", bid_amount, err)
-                continue
-            except Exception as err:
-                failed_to_bid += 1
-                log.error("Failed to liquidation auction bid info for bid amount %s: %s", bid_amount, err)
-                continue
-
-            if not bid_info["action_executable"]:
+        results = await asyncio.gather(*liquidation_tasks, return_exceptions=True) # LATER: impose a max run time on liquidation tasks so we don't get stuck?
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                bid_failed += 1
+                log.error(f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) failed: {result}")
+            elif result == BidFail.NOT_POSSIBLE:
                 bid_not_possible += 1
-                min_byc_amount_to_bid = bid_info["min_byc_amount_to_bid"]
-                if available_byc_amount < min_byc_amount_to_bid:
-                    log.info(
-                        "Cannot place bid of amount %s m%s in liquidation auction for vault %s: Amount available in wallet is less than min amount to bid (%s < %s)",
-                        bid_amount, stablecoin_symbol, vault_name, available_byc_amount, min_byc_amount_to_bid
-                    )
-                else:
-                    log.info("Cannot place bid of amount %s m%s in liquidation auction for vault %s", bid_amount, stablecoin_symbol, vault_name)
-                continue
-
-            collateral_to_receive = bid_info["collateral_to_receive"]/MOJOS_PER_XCH
-            leftover_collateral = bid_info["leftover_collateral"]/MOJOS_PER_XCH
-
-            log.info(
-                "Can buy %.12f %s at %.2f %s for %.3f %s in liquidation auction, leaving %.12f of %.12f %s in collateral",
-                collateral_to_receive, collateral_symbol, auction_price/PRICE_PRECISION, f"{collateral_symbol}/{stablecoin_symbol}",
-                bid_amount/MCAT, stablecoin_symbol, leftover_collateral, collateral/MOJOS_PER_XCH, collateral_symbol,
-            )
-
-            collateral_to_sell = min(collateral_to_receive, available_xch_balance)#TODO: take into account OKX fees # including available_xch_balance again here due to potential rounding errors in bid_amount calculation
-
-            hedge_price, _, hedge_volume = okx_order_book.price("sell", collateral_to_sell, True)
-            hedge_amount = hedge_price * hedge_volume
-            log.info(f"Can sell {collateral_to_receive:.12f} {collateral_symbol} at {hedge_price} {price_symbol} for {hedge_amount} {proxy_symbol} (hedge amount) on OKX")
-
-            if hedge_amount <= bid_amount * (1 + MARGIN)/MCAT:
-                auction_price_too_high += 1
-                log.info(f"Hedge amount does not exceed {(1+MARGIN)*100:.1f}% of bid amount ({hedge_amount} {stablecoin_symbol} <= {bid_amount * (1+MARGIN)/MCAT} {stablecoin_symbol}). Risk too high. Not placing a bid in liquidation auction")
-                continue
+                log.info(f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded, but vault not liquidated: {result}")
+            elif result == BidFail.NOT_PROFITABLE:
+                bid_not_profitable += 1
+                log.info(f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded, but vault not liquidated: {result}")
             else:
-                log.info(f"Hedge amount is greater than {(1+MARGIN)*100:.1f}% of bid amount ({hedge_amount} {stablecoin_symbol} > {bid_amount * (1+MARGIN)/MCAT} {stablecoin_symbol}. Placing bid of {bid_amount/MCAT:.3f} {stablecoin_symbol} in liquidation auction")
-                # bid for collateral
-                try:
-                    response = await rpc_client.upkeep_vaults_bid(vault_name, bid_amount)
-                except httpx.HTTPStatusError as err:
-                    failed_to_bid += 1
-                    log.error("Failed to place liquidation auction bid for vault %s due to HTTPStatusError: %s", vault_name, err)
-                    continue
-                except httpx.ReadTimeout as err:
-                    failed_to_bid += 1
-                    log.error("Failed to place liquidation auction bid for vault %s due to ReadTimeout: %s", vault_name, err)
-                    continue
-                except ValueError as err:
-                    failed_to_bid += 1
-                    log.error("Failed to place liquidation auction bid for vault %s due to ValueError: %s", vault_name, err)
-                    continue
-                except Exception as err:
-                    failed_to_bid += 1
-                    log.error("Failed to place liquidation auction bid for vault %s: %s", vault_name, err)
-                    continue
+                log.info(f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded: {result}")
 
-                if not response["status"] == "success":
-                    failed_to_bid += 1
-                    log.error("Failed to place liquidation auction bid for vault %. Response code: %s", vault_name, response["success"])
-                    continue
-
-                # hedge on OKX
-                retry_delay = 1
-                while True:
-                    log.info("Placing market sell order for %s %s on OKX", hedge_volume, collateral_symbol)
-                    try:
-                        response = await tradeAPI.place_order(
-                            instId=market_symbol,
-                            tdMode='cash',
-                            side='sell',
-                            ordType='market',
-                            tgtCcy='base_ccy', # currency in which size is measured
-                            sz="{:.{}f}".format(hedge_volume, base_decimals),
-                        )
-                    except Exception as err:
-                        # keep trying in case of error as we need to close our position
-                        log.error("Failed to place market sell order on OKX: %s. Retrying in %s seconds", str(err), retry_delay)
-                        await asyncio.sleep(retry_delay)
-                        continue
-
-                    if not response["code"] == "0":
-                        # OKX failed to place order
-                        log.error("Failed to place market sell order on OKX. Response: %s", json.dumps(response))
-                        await asyncio.sleep(retry_delay)
-                        continue
-                    if not len(response["data"]) == 1:
-                        log.warning("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
-
-                    ordId = response["data"][0]["ordId"]
-                    log.info("Successfully placed market sell order on OKX. OrdId: %s", ordId) # Response: %s", json.dumps(response))
-
-                    # check that we sold expected amount and calculate PnL
-                    try:
-                        response = await tradeAPI.get_order(instId=market_symbol, ordId=ordId)
-                    except Exception as err:
-                        # keep trying in case of error as we need to close our position
-                        log.error("Failed to get OKX order ordId %s", ordId)
-                        break
-
-                    if not response["code"] == "0":
-                        # failed to get order
-                        log.error("Failed to get OKX order ordId %s. Response: %s", ordId, json.dumps(response))
-                        break
-                    if not len(response["data"]) == 1:
-                        log.warning("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
-
-                    state = response["data"][0]["fillSz"]
-                    #last_fill_volume = float(response["data"][0]["fillSz"]) # given in base currency
-                    total_fill_volume = float(response["data"][0]["accFillSz"]) # given in base currency
-                    #last_fill_price = float(response["data"][0]["fillPx"])
-                    avg_fill_price = float(response["data"][0]["avgPx"]) if response["data"][0]["avgPx"] != "" else None
-                    okx_fee = float(response["data"][0]["fee"]) # accumulated fee and rebate in quote currency
-                    fee_ccy = response["data"][0]["feeCcy"]
-                    if not state == "filled":
-                        log.warning("Market sell order was not filled. State: %s", state)
-                    if not fee_ccy == proxy_symbol:
-                        log.error("Market sell order fees were charged in %s, expected %s", fee_ccy, proxy_symbol)
-                    if not total_fill_volume == hedge_volume:
-                        log.warning("Filled volume does not equal desired hedge volume (%s != %s)", total_fill_volume, hedge_volume)
-
-                    quote_delta = bid_amount/MCAT - total_fill_volume * avg_fill_price
-                    base_delta = collateral_to_receive - total_fill_volume + okx_fee # LATER: add on-chain tx fee
-                    pnl = quote_delta + base_delta * okx_order_book.mid_price()
-
-                    log.info("PnL: %.2f USD. Remaining %.3f position: %s. Remaining %s stablecoin position: %.3f", pnl, collateral_symbol, base_delta, quote_delta)
-
-                    break
-
-                # reconcile balances
-                # LATER: OKX may adjust size of market order if user doesn't have enough funds.
-                #   See banAmend parameter: https://my.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order
-
-                # recycle capital
-                # LATER: USDT -> USDC --transfer to Base-> USDC.b --warp.green-> wUSDC.b -> BYC
-
-        if bid_not_possible > 0 or failed_to_bid > 0:
+        if bid_failed > 0 or bid_not_possible > 0:
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
