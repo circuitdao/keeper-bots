@@ -10,15 +10,19 @@
 
 import os
 import asyncio
+import httpx
 import argparse
 import logging
+import yaml
+import json
+from enum import Enum
+from math import ceil
 from dotenv import load_dotenv
-from pprint import pprint
 
-#from chia.types.coin_spend import compute_additions
-from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import puzzle_hash_for_synthetic_public_key
-from chia.wallet.util.compute_additions import compute_additions
-from chia_rs import SpendBundle #Coin, G2Element, CoinSpend
+
+#from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import puzzle_hash_for_synthetic_public_key
+#from chia.wallet.util.compute_additions import compute_additions
+#from chia_rs import SpendBundle #Coin, G2Element, CoinSpend
 
 from circuit_cli.client import CircuitRPCClient
 
@@ -28,20 +32,30 @@ from circuit_cli.client import CircuitRPCClient
 #from okx_async.websocket.WsPrivate import WsPrivate
 from okx_async.websocket.WsPrivateAsync import WsPrivateAsync
 from okx_async.AsyncTrade import AsyncTradeAPI
+from okx_async.AsyncAccount import AsyncAccountAPI
 
-from keeper_bots.okx_feed import OkxFeed
+#from keeper_bots.okx_feed import OkxFeed
 from keeper_bots.okx_order_book import OkxOrderBook
-from keeper_bots.okx_orders import OkxOrders
-from keeper_bots.okx_balances import OkxBalances
+#from keeper_bots.okx_orders import OkxOrders
+#from keeper_bots.okx_balances import OkxBalances
 from keeper_bots.utils import SPOT
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    filename="liquidation_bot.log",
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-log = logging.getLogger(__name__)
+
+PRICE_PRECISION = 100
+MOJOS_PER_XCH = 10**12
+MCAT=1000
+
+class TradeEnv(Enum):
+    LIVE = "0"
+    DEMO = "1"
+
+
+if os.path.exists("log_conf.yaml"):
+    with open("log_conf.yaml", "r") as f:
+        config = yaml.safe_load(f)
+        logging.config.dictConfig(config)
+
+log = logging.getLogger("liquidation_bid_bot")
 
 ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(ENV_FILE, override=True)
@@ -52,8 +66,9 @@ add_sig_data = str(os.getenv("ADD_SIG_DATA")) # Additional signature data (depen
 fee_per_cost = int(os.getenv("FEE_PER_COST")) # Fee per cost for transactions
 CONTINUE_DELAY = int(os.getenv("LIQUIDATION_CONTINUE_DELAY")) # Wait (in seconds) before job runs again after a failed run
 RUN_INTERVAL = int(os.getenv("LIQUIDATION_RUN_INTERVAL")) # Wait (in seconds) before job runs again after a failed interest withdrawal due to insufficiently large treasury coins
-LIQUIDATION_MAX_BID_AMOUNT = int(os.getenv("LIQUIDATION_MAX_BID_AMOUNT"))
-LIQUIDATION_MIN_MARGIN = float(os.getenv("LIQUIDATION_MIN_MARGIN"))
+max_bid_amount = os.getenv("LIQUIDATION_MAX_BID_AMOUNT") # max bid amount (in mBYC). If None, there's no cap on bid amount
+MAX_BID_AMOUNT = int(max_bid_amount) if max_bid_amount and max_bid_amount.strip() else None
+MARGIN = float(os.getenv("LIQUIDATION_MARGIN"))
 
 
 if not rpc_url:
@@ -66,296 +81,327 @@ if not private_key:
 rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
 
-def get_market(base, quote):
-    """Return internal symbols for market and price"""
+def get_okx_symbols(base_symbol, quote_symbol):
+    """Return OKX symbols for market and price"""
+    return f"{base_symbol}-{quote_symbol}", f"{base_symbol}/{quote_symbol}"
 
-    return [f"{base}-{quote}", f"{base}/{quote}"]
-
-
-async def listen_to_balances_okx(ws_okx_private, balances_okx, verbose=False):
-
-    # Subscribe to account balances
-    args_balances_okx = []
-    for a in balances_okx.balances.keys():
-        args_balances_okx.append({"channel": "account", "ccy": a, "extraParams": "{\"updateInterval\": 0}"})
-
-    ws_okx_private.subscribe(args_balances_okx, callback=balances_okx)
-
-
-async def listen_to_order_book_okx(order_book_okx, verbose=False):
-    frequency = 10 # Frequency (in seconds) with which to retrieve order book
-    while True:
-        await order_book_okx.__call__()
-        if verbose:
-            print("PRINTING ORDER BOOK FROM listen_to_order_book_okx")
-            pprint(order_book_okx.order_book)
-        await asyncio.sleep(frequency)
-
-
-async def listen_to_orders_okx(ws_okx_private, orders_okx, verbose=False):
-
-    # Subscribe to orders
-    args_orders_okx = []
-    args_orders_okx.append({"channel": "orders", "instType": "SPOT", "instId": orders_okx.market})
-
-    ws_okx_private.subscribe(args_orders_okx, callback=orders_okx)
-
-    # Since the channel doesn't provide a snapshot, we have to GET one ourselves!
-    # First wait until we are subscribed, so that we don't miss any updates after the snapshot
-    while not orders_okx.subscribed:
-        await asyncio.sleep(1)
-
-    # Take the snapshot
-    await orders_okx.take_snapshot()
-
-
-# Listen to all activity within the CircuitDAO protocol
-async def listen_to_protocol(collateral, stable, proxy):
-
-    await asyncio.sleep(1)
-
-class TradeEnv(Enum):
-    LIVE = "0"
-    DEMO = "1"
-
-async def test_order_placement_okx(collateral, proxy):
-
-    market_okx, sym_okx = get_market(collateral, proxy)
-
-    # For test purposes, wait a bit, then place and cancel an order
-    await asyncio.sleep(10)
-
-    flag = TradeEnv.DEMO # "0" = live, "1" = demo
-    if flag == TradeEnv.DEMO:
-        key = os.getenv("VOLTAGE_OKX_API_DEMO_TRADING_KEY")
-        secret = os.getenv("VOLTAGE_OKX_API_DEMO_TRADING_SECRET")
-        passphrase = os.getenv("VOLTAGE_OKX_API_DEMO_TRADING_PASSPHRASE")
-    elif flag == TradeEnv.LIVE:
-        key = os.getenv("VOLTAGE_OKX_API_LIVE_TRADING_KEY")
-        secret = os.getenv("VOLTAGE_OKX_API_LIVE_TRADING_SECRET")
-        passphrase = os.getenv("VOLTAGE_OKX_API_LIVE_TRADING_PASSPHRASE")
-
-    tradeAPI = AsyncTradeAPI(key, secret, passphrase, flag=flag.value, debug=False)
-
-    response = (await tradeAPI.place_order(market_okx, 'cash', 'buy', 'limit', '0.17', px='5.7'))["data"]
-    print("Order placed:")
-    pprint(response)
-
-    await asyncio.sleep(1)
-
-    response = (await tradeAPI.cancel_order(market_okx, response[0]["ordId"]))["data"]
-    print("Order cancelled:")
-    pprint(response)
-
-
-async def test_order_placement_onchain(collateral, stable):
-
-    market_onchain, sym_onchain = get_market(collateral, stable)
-
-    # For test purposes, wait a bit, then place and cancel an order
-    await asyncio.sleep(10)
 
 # TODO: take fees into account (on- and off-chain)
+async def run_liquidation_bid_bot():
 
-async def run_liquidation_bot():
-
-    parser = argparse.ArgumentParser(description="Liquidation bot for Circuit protocol")
+    parser = argparse.ArgumentParser(description="Liquidation bid bot for Circuit protocol")
+    parser.add_argument("-e", "--environment", choices=["demo", "live"], default="demo")
     parser.add_argument("-v", "--verbose", action='store_true', help="Verbose output")
-    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], default="INFO")
     args = parser.parse_args()
 
-    # Set log level dynamically
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
-    collateral_sym = "XCH" # CircuitDAO collateral asset
-    stable = "BYC" # CircuitDAO stablecoin (BYC)
-
-    # BYC proxy asset to be used for hedging
-    # Note: on OKX, instID uniquely identifies the market. No need to know the instrument type.
-    proxy_instrument = SPOT
-    proxy = "USDT"
-
-    # Market and OKX symbol corresponding to base and quote
-    market, sym = get_market(collateral_sym, proxy)
-
-    #sym = "XCH-USDT"
-    uquote = "USD" # ultimate quote currency
-
-    # Set trade environment
-    flag = TradeEnv.DEMO
-    if flag == TradeEnv.DEMO:
+    if args.environment == "demo":
+        trade_env = TradeEnv.DEMO
+        collateral_symbol = "XRP" # CircuitDAO collateral asset
         okx_websocket_url = "wss://wseeapap.okx.com:8443/ws/v5/public"
         key = os.getenv("VOLTAGE_OKX_API_DEMO_TRADING_KEY")
         secret = os.getenv("VOLTAGE_OKX_API_DEMO_TRADING_SECRET")
         passphrase = os.getenv("VOLTAGE_OKX_API_DEMO_TRADING_PASSPHRASE")
-    elif flag == TradeEnv.LIVE:
+    elif args.environment == "live":
+        trade_env = TradeEnv.LIVE
+        collateral_symbol = "XCH" # CircuitDAO collateral asset
         okx_websocket_url = "wss://wseea.okx.com:8443/ws/v5/public" # (wss://ws.okx.com:8443/ws/v5/public)
         key = os.getenv("VOLTAGE_OKX_API_LIVE_TRADING_KEY")
         secret = os.getenv("VOLTAGE_OKX_API_LIVE_TRADING_SECRET")
         passphrase = os.getenv("VOLTAGE_OKX_API_LIVE_TRADING_PASSPHRASE")
 
+    log.info("Running liquidation bid bot in %s environment", trade_env.name)
+
+    stablecoin_symbol = "BYC" # Circuit stablecoin (BYC)
+
+    # BYC proxy asset to be used for hedging
+    # Note: on OKX, instID uniquely identifies the market. No need to know the instrument type.
+    proxy_instrument = SPOT
+    proxy_symbol = "USDT"
+
+    # OKX symbol corresponding to base and quote
+    market_symbol, price_symbol = get_okx_symbols(collateral_symbol, proxy_symbol)
+
+    #sym = "XCH-USDT"
+    uquote_symbol = "USD" # ultimate quote currency
+
     # Subscribe to order book
-    okx_order_book = OkxOrderBook(market, uquote, okx_websocket_url, verbose=args.verbose)
+    okx_order_book = OkxOrderBook(market_symbol, uquote_symbol, okx_websocket_url, verbose=args.verbose)
     await okx_order_book.connect()
     await okx_order_book.subscribe()
 
     # Instantiate trade API
-    tradeAPI = AsyncTradeAPI(key, secret, passphrase, flag=flag.value, debug=False)
+    debug = True if trade_env == TradeEnv.DEMO else False
+    if not all([key, secret, passphrase]):
+        ValueError("Must provide key, secret and passphrase to connect to OKX trade API")
+    tradeAPI = AsyncTradeAPI(key, secret, passphrase, flag=trade_env.value, debug=debug)
+    accountAPI = AsyncAccountAPI(key, secret, passphrase, flag=trade_env.value, debug=debug)
 
-    log.info("Running liquidation bot")
-
-    margin = 0.25
-    limit_order_buffer = 0.5 # this should be quite generous in case the market has moved
-    base_amount_decimals = 4 # TODO: can we get this from OKX API in case it ever changes?
+    base_decimals = 4 # TODO: can we get this from OKX API in case it ever changes?
     price_decimals = 4 # TODO: can we get this from OKX API in case it ever changes?
 
     while True:
 
-        #my_puzzle_hash = puzzle_hash_for_synthetic_public_key(rpc_client.synthetic_public_keys[0])
-        balances = await rpc_client.wallet_balances()
-        print("Wallet balances", balances)
-        state = await rpc_client.upkeep_state(vaults=True)
-        print("Protocol state", state)
-        vaults_pending = state.get("vaults_pending_liquidation", [])
-        print("%s vaults pending liquidation", len(vaults_pending))
-        for vault in vaults_pending[:1]:
-            try:
-                response = await rpc_client.upkeep_vaults_liquidate(vault["name"])
-            except httpx.ReadTimeout as err:
-                log.error("Failed to get liquidation auction bid info due to ReadTimeout: %s", err)
-                await asyncio.sleep(CONTINUE_DELAY)
-                continue
-            except ValueError as err:
-                log.error("Failed to get liquidation auction bid info due to ValueError: %s", err)
-                await asyncio.sleep(CONTINUE_DELAY)
-                continue
-            except Exception as err:
-                log.error("Failed to liquidation auction bid info: %s", err)
-                await asyncio.sleep(CONTINUE_DELAY)
-                continue
-
-            print("Liquidation auction started for vault", vault["name"])
-            print()
-
-        debt = 50000
-        auction_price = 8.7
+        await rpc_client.set_fee_per_cost()
 
         try:
-            bid_info = rpc_client.upkeep_vaults_bid(vault["name"], debt, info=True)
+            state = await rpc_client.upkeep_state(vaults=True)
         except httpx.ReadTimeout as err:
-            log.error("Failed to get liquidation auction bid info due to ReadTimeout: %s", err)
+            log.error("Failed to get state of vaults due to ReadTimeout: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
-            log.error("Failed to get liquidation auction bid info due to ValueError: %s", err)
+            log.error("Failed to get state of vaults due to ValueError: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
-            log.error("Failed to liquidation auction bid info: %s", err)
+            log.error("Failed to get state of vaults: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        expected_collateral = bid_info["collateral_to_receive"]
+        vaults_in_liquidation = state.get("vaults_in_liquidation", [])
 
-        hedge_price, hedge_amount = okx_order_book.price("sell", expected_collateral, True)
-        log.info(f"Can sell {expected_collateral} XCH at {hedge_price} {collateral_sym}/{proxy} for {hedge_amount} {proxy}")
+        if not vaults_in_liquidation:
+            log.info("No vaults in liquidation. Sleeping for %s seconds", RUN_INTERVAL)
+            await asyncio.sleep(RUN_INTERVAL)
+            continue
 
-        if hedge_amount > debt * (1 + margin):
-            # bid for collateral
+        log.info("%s vaults in liquidation. Bidding in liquidation auctions", len(vaults_in_liquidation))
+
+        auction_price_too_high = 0
+        bid_not_possible = 0
+        failed_to_bid = 0
+        for vault in vaults_in_liquidation:
+
+            # get vault collateral, debt and max byc amount to bid
             try:
-                response = await rpc_client.upkeep_vault_bid(vault["name"], debt)
+                vault_name = vault["name"]
+                log.info("Getting bid info for vault %s", vault_name)
+                bid_info = await rpc_client.upkeep_vaults_bid(vault_name, info=True)
             except httpx.ReadTimeout as err:
-                log.error("Failed to place liquidation auction bid due to ReadTimeout: %s", err)
-                await asyncio.sleep(CONTINUE_DELAY)
+                failed_to_bid += 1
+                log.error("Failed to get liquidation auction bid info due to ReadTimeout: %s", err)
                 continue
             except ValueError as err:
-                log.error("Failed to place liquidation auction bid due to ValueError: %s", err)
-                await asyncio.sleep(CONTINUE_DELAY)
+                failed_to_bid += 1
+                log.error("Failed to get liquidation auction bid info due to ValueError: %s", err)
                 continue
             except Exception as err:
-                log.error("Failed to place liquidation auction bid: %s", err)
-                await asyncio.sleep(CONTINUE_DELAY)
+                failed_to_bid += 1
+                log.error("Failed to get liquidation auction bid info: %s", err)
                 continue
 
-            if not response["success"]:
-                log.error("Failed to place liquidation auction bid on OK. Response code: %s", response["success"])
-                await asyncio.sleep(CONTINUE_DELAY)
+            if not bid_info["action_executable"]:
+                bid_not_possible += 1
+                log.info("Cannot place bid in liquidation auction for vault %s", vault_name) # TODO: provide additional info on why not
                 continue
 
-            # hedge on OKX
-            while True:
-                try:
-                    response = await tradeAPI.place_order(
-                        market, 'cash', 'sell', 'limit',
-                        "{:.{}f}".format(hedge_amount, base_decimals),
-                        px="{:.{}f}".format(hedge_price * limit_order_buffer, price_decimals),
+            auction_price = bid_info["auction_price"] #/PRICE_PRECISION
+            collateral = bid_info["collateral"]
+            debt = bid_info["debt"]
+            max_byc_amount_to_bid = bid_info["max_byc_amount_to_bid"]
+            leftover_collateral = bid_info["leftover_collateral"]
+
+            if debt > max_byc_amount_to_bid and not leftover_collateral == 0:
+                # this should never happen! bid should use up all collateral if max amount to bid is less than debt
+                log.warning(
+                    "There is leftover collateral (%s) despite max amount to bid being less than debt (%s < %s)",
+                    leftover_collateral, max_byc_amount_to_bid, debt
+                )
+
+            log.info(
+                "Vault %s has collateral=%s %s  debt=%s m%s  max amount to bid=%s m%s",
+                vault_name, collateral/MOJOS_PER_XCH, collateral_symbol, debt, stablecoin_symbol, max_byc_amount_to_bid, stablecoin_symbol
+            )
+
+            # get wallet byc balance
+            try:
+                balances = await rpc_client.wallet_balances()
+            except httpx.ReadTimeout as err:
+                failed_to_bid += 1
+                log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
+                continue
+            except ValueError as err:
+                failed_to_bid += 1
+                log.error("Failed to get wallet balances due to ValueError: %s", err)
+                continue
+            except Exception as err:
+                failed_to_bid += 1
+                log.error("Failed to get wallet balances: %s", err)
+                continue
+
+            available_byc_amount = balances["byc"]
+
+            # get OKX xch balance
+            try:
+                response = await accountAPI.get_account_balance(
+                    ccy=collateral_symbol,
+                )
+            except Exception as err:
+                # keep trying in case of error as we need to close our position
+                failed_to_bid += 1
+                log.error("Failed to get OKX account balance")
+                continue
+
+            if not response["code"] == "0":
+                # Failed to receive OKX account balance
+                log.error("Failed to get OKX account balance. Response: %s", json.dumps(response))
+                continue
+            if not len(response["data"]) == 1:
+                log.error("Unexpected length of response['data'] list. Expected 1, got %s. Response: %s", len(response["data"]), json.dumps(response))
+                continue
+            if not len(response["data"][0]["details"]) == 1:
+                log.error("Unexpected length of response['data'][0]['details'] list. Expected 1, got %s. Response: %s", len(response["data"][0]["details"]), json.dumps(response))
+                continue
+
+            available_xch_balance = float(response["data"][0]["details"][0]["cashBal"]) # in XCH
+
+            log.info("Got OKX account balance: %s %s. Response: %s", available_xch_balance, collateral_symbol, json.dumps(response))
+
+            log.info(
+                "Vault %s has collateral=%s %s  debt=%s %s available amount: %s %s. Max bid amount: %s %s",
+                vault_name, collateral/MOJOS_PER_XCH, collateral_symbol, debt/MCAT, stablecoin_symbol,
+                available_byc_amount/MCAT, stablecoin_symbol, max_byc_amount_to_bid/MCAT, stablecoin_symbol
+            )
+
+            bid_amount = min(
+                available_byc_amount, # don't bid more than available in wallet
+                max_byc_amount_to_bid, # don't bid more than necessary according to vault state (amount of debt & collateral)
+                int(available_xch_balance * auction_price * 1000 / PRICE_PRECISION), # don't bid more than can be hedged
+            )
+            if MAX_BID_AMOUNT is not None:
+                bid_amount = min(bid_amount, MAX_BID_AMOUNT)
+
+            try:
+                vault_name = vault["name"]
+                log.info("Getting bid info for vault %s with bid amount %s", vault_name, bid_amount)
+                bid_info = await rpc_client.upkeep_vaults_bid(vault_name, amount=bid_amount, info=True)
+            except httpx.ReadTimeout as err:
+                failed_to_bid += 1
+                log.error("Failed to get liquidation auction bid info for bid amount %s due to ReadTimeout: %s", bid_amount, err)
+                continue
+            except ValueError as err:
+                failed_to_bid += 1
+                log.error("Failed to get liquidation auction bid info for bid amount %s due to ValueError: %s", bid_amount, err)
+                continue
+            except Exception as err:
+                failed_to_bid += 1
+                log.error("Failed to liquidation auction bid info for bid amount %s: %s", bid_amount, err)
+                continue
+
+            if not bid_info["action_executable"]:
+                bid_not_possible += 1
+                min_byc_amount_to_bid = bid_info["min_byc_amount_to_bid"]
+                if available_byc_amount < min_byc_amount_to_bid:
+                    log.info(
+                        "Cannot place bid of amount %s m%s in liquidation auction for vault %s: Amount available in wallet is less than min amount to bid (%s < %s)",
+                        bid_amount, stablecoin_symbol, vault_name, available_byc_amount, min_byc_amount_to_bid
                     )
+                else:
+                    log.info("Cannot place bid of amount %s m%s in liquidation auction for vault %s", bid_amount, stablecoin_symbol, vault_name)
+                continue
+
+            collateral_to_receive = bid_info["collateral_to_receive"]/MOJOS_PER_XCH
+            leftover_collateral = bid_info["leftover_collateral"]/MOJOS_PER_XCH
+
+            log.info(
+                "Can buy %.12f %s at %.2f %s for %.3f %s in liquidation auction, leaving %.12f of %.12f %s in collateral",
+                collateral_to_receive, collateral_symbol, auction_price/PRICE_PRECISION, f"{collateral_symbol}/{stablecoin_symbol}",
+                bid_amount/MCAT, stablecoin_symbol, leftover_collateral, collateral/MOJOS_PER_XCH, collateral_symbol,
+            )
+
+            collateral_to_sell = min(collateral_to_receive, available_xch_balance)
+
+            hedge_price, _, hedge_volume = okx_order_book.price("sell", collateral_to_sell, True)
+            hedge_amount = hedge_price * hedge_volume
+            log.info(f"Can sell {collateral_to_receive:.12f} {collateral_symbol} at {hedge_price} {price_symbol} for {hedge_amount} {proxy_symbol} (hedge amount) on OKX")
+
+            if hedge_amount <= bid_amount * (1 + MARGIN)/MCAT:
+                auction_price_too_high += 1
+                log.info(f"Hedge amount does not exceed {(1+MARGIN)*100:.1f}% of bid amount ({hedge_amount} {stablecoin_symbol} <= {bid_amount * (1+MARGIN)/MCAT} {stablecoin_symbol}). Risk too high. Not placing a bid in liquidation auction")
+                continue
+            else:
+                log.info(f"Hedge amount is greater than {(1+MARGIN)*100:.1f}% of bid amount ({hedge_amount} {stablecoin_symbol} > {bid_amount * (1+MARGIN)/MCAT} {stablecoin_symbol}. Placing bid of {bid_amount/MCAT:.3f} {stablecoin_symbol} in liquidation auction")
+                # bid for collateral
+                try:
+                    response = await rpc_client.upkeep_vaults_bid(vault_name, bid_amount)
+                except httpx.HTTPStatusError as err:
+                    failed_to_bid += 1
+                    log.error("Failed to place liquidation auction bid for vault %s due to HTTPStatusError: %s", vault_name, err)
+                    continue
+                except httpx.ReadTimeout as err:
+                    failed_to_bid += 1
+                    log.error("Failed to place liquidation auction bid for vault %s due to ReadTimeout: %s", vault_name, err)
+                    continue
+                except ValueError as err:
+                    failed_to_bid += 1
+                    log.error("Failed to place liquidation auction bid for vault %s due to ValueError: %s", vault_name, err)
+                    continue
                 except Exception as err:
-                    log.error("Failed to place order on OKX: %s", str(err))
-                    await asyncio.sleep(1)
+                    failed_to_bid += 1
+                    log.error("Failed to place liquidation auction bid for vault %s: %s", vault_name, err)
                     continue
 
-                data = response["data"]
-
-                if not data["code"] == 0:
-                    # OKX failed to place order
-                    log.error("Failed to place order on OKX. Response code: %s. Message: %s", data["code"], data["msg"])
-                    await asyncio.sleep(1)
+                if not response["status"] == "success":
+                    failed_to_bid += 1
+                    log.error("Failed to place liquidation auction bid for vault %. Response code: %s", vault_name, response["success"])
                     continue
 
-                log.info("Successfully placed order: %s", json.dumps(data))
-                break
+                # hedge on OKX
+                retry_delay = 1
+                while True:
+                    log.info(f"Placing market sell order on OKX to hedge position. Volume: {hedge_volume} {collateral_symbol}")
+                    try:
+                        size = "{:.{}f}".format(hedge_volume, base_decimals)
+                        response = await tradeAPI.place_order(
+                            instId=market_symbol,
+                            tdMode='cash',
+                            side='sell',
+                            ordType='market',
+                            tgtCcy='base_ccy', # currency in which size is measured
+                            sz=size,
+                        )
+                    except Exception as err:
+                        # keep trying in case of error as we need to close our position
+                        log.error("Failed to place market sell order on OKX: %s. Retrying in %s seconds", str(err), retry_delay)
+                        await asyncio.sleep(retry_delay)
+                        continue
 
-            # reconcile balances
-            #TODO:
+                    print(f"{response=}")
 
-            # recycle capital
-            #TODO: USDT -> USDC --transfer to Base-> USDC.b --warp.green-> wUSDC.b -> BYC
+                    if not response["code"] == "0":
+                        # OKX failed to place order
+                        log.error("Failed to place market sell order on OKX. Response: %s", json.dumps(response))
+                        await asyncio.sleep(retry_delay)
+                        continue
 
+                    data = response["data"]
+
+                    log.info("Successfully placed market sell order on OKX. Response: %s", json.dumps(response))
+                    break
+
+                # reconcile balances
+                # TODO: OKX may adjust size of market order if user doesn't have enough funds.
+                #   See banAmend parameter: https://my.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order
+
+                # recycle capital
+                # TODO: USDT -> USDC --transfer to Base-> USDC.b --warp.green-> wUSDC.b -> BYC
+
+        if bid_not_possible > 0 or failed_to_bid > 0:
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
 
         await asyncio.sleep(RUN_INTERVAL)
 
 
 def main():
-    asyncio.run(run_liquidation_bot())
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(run_liquidation_bid_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down liquidation bid bot")
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
-
-
-"""
-# Instantiate OKX balances object
-balances_okx = Balances(assets=[collateral, proxy], verbose=args.verbose)
-
-# Instantiate OKX order book object
-order_book_okx = OrderBook(proxy_instrument, market, verbose=args.verbose)
-
-# Instantiate OKX orders object
-orders_okx = Orders(proxy_instrument, market, verbose=args.verbose)
-
-# Connect to private OKX websocket
-ws_okx_private = WsPrivate(apiKey=os.getenv("OKX_API_KEY"),
-                           passphrase=os.getenv("OKX_API_PASSPHRASE"),
-                           secretKey=os.getenv("OKX_API_SECRET"),
-                           url="wss://wsaws.okx.com:8443/ws/v5/private",
-                           useServerTime=False)
-ws_okx_private.start()
-
-# Listen to market and blockchain and participate in liquidation auctions
-await asyncio.gather(listen_to_balances_okx(ws_okx_private, balances_okx, args.verbose),
-                     listen_to_order_book_okx(order_book_okx, verbose=args.verbose),
-                     listen_to_orders_okx(ws_okx_private, orders_okx, args.verbose),
-                     #listen_to_liquidations(collateral, stable, proxy, args.verbose),
-                     test_order_placement_okx(collateral, proxy),
-                     test_order_placement_onchain(collateral, stable))
-
-# Instantiante on-chain balances object
-#balances_onchain = Balances(assets=[collateral, stable], verbose=verbose)
-"""
