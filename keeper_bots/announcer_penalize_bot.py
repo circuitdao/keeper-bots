@@ -86,7 +86,7 @@ async def run_announcer_penalize_bot():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        if len(announcers) < 1:
+        if not announcers:
             log.error("No penalizable announcer found. Sleeping for %s seconds", RUN_INTERVAL)
             await asyncio.sleep(RUN_INTERVAL)
             continue
@@ -105,9 +105,9 @@ async def run_announcer_penalize_bot():
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 failed_tasks += 1
-                log.error(f"Penalization task {i} (announcer {penalization_tasks[i]['name']}) failed: {result}")
+                log.error(f"Penalization task {i} (announcer {announcers[i]['name']}) failed: {result}")
             else:
-                log.info(f"Penalization task {i} (announcer {penalization_tasks[i]['name']}) succeeded: {result}")
+                log.info(f"Penalization task {i} (announcer {announcers[i]['name']}) succeeded: {result}")
 
         if failed_tasks > 0:
             await asyncio.sleep(CONTINUE_DELAY)

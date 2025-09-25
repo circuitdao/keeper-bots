@@ -46,12 +46,14 @@ if not rpc_url:
     raise ValueError("No URL found at which Circuit RPC server can be reached")
 if not private_key:
     raise ValueError("No master private key found")
-if not (TARGET_PUZZLE_HASH is None or TARGET_PUZZLE_HASH == ""):
+if not TARGET_PUZZLE_HASH in [None, ""]:
     try:
         bytes32.fromhex(TARGET_PUZZLE_HASH)
     except:
-        log.exception("Invalid TARGET_PUZZLE_HASH provided. Must be None or convertible to type bytes32")
+        log.exception("Invalid TARGET_PUZZLE_HASH. Must be None, empty string, or convertible to type bytes32")
         raise
+elif TARGET_PUZZLE_HASH == "":
+    TARGET_PUZZLE_HASH = None
 
 rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
