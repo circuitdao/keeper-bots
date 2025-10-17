@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "keeper-bots"
-version = "0.2.5"
+version = "0.2.7"
 description = "Keeper bots for Circuit protocol"
 authors = ["CircuitDAO"]
 license = "MIT"
@@ -15,8 +15,8 @@ python-dotenv = "^1.0.0"
 autobahn = "^23.6.2"
 chia-blockchain = "2.5.5"
 service-identity = "^24.1.0"
-#circuit-cli = {path = "../circuit-cli", develop = true}
-circuit-cli = {git = "https://github.com/circuitdao/circuit-cli.git", branch = "main"}
+circuit-cli = {path = "../circuit-cli", develop = true}
+#circuit-cli = {git = "https://github.com/circuitdao/circuit-cli.git", branch = "main"}
 coinbase-advanced-py = "^1.8.2"
 python-json-logger = "^3.3.0"
 #python-okx-async = {path = "../python-okx-async", develop = true}

@@ -104,7 +104,7 @@ if [[ ! -f "pyproject.toml" ]]; then
     exit 1
 fi
 
-if [[ ! -f "build.sh" ]]; then
+if [[ ! -f "./gcp/build.sh" ]]; then
     echo -e "${RED}Error: build.sh not found. Please run this script from the keeper-bots directory.${NC}"
     exit 1
 fi
@@ -250,7 +250,7 @@ build_and_push() {
         build_args="$build_args --dry-run"
     fi
     
-    ./build.sh $build_args
+    ./gcp/build.sh $build_args
 }
 
 # Function to commit version changes
