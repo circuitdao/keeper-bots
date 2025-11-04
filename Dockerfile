@@ -1,5 +1,5 @@
 # Multi-stage build for keeper bots
-FROM python:3.11-slim as base
+FROM python:3.13-slim as base
 
 # Install system dependencies in a separate cached layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -31,11 +31,11 @@ COPY pyproject.toml poetry.lock ./
 
 # Configure poetry and install dependencies
 RUN poetry config virtualenvs.create false \
-    && poetry install --only=main --no-root --no-interaction --no-ansi \
+    && poetry sync --only=main --no-root --no-interaction --no-ansi \
     && rm -rf $POETRY_CACHE_DIR
 
 # Production stage
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Accept build arguments
 ARG CHIA_NETWORK=mainnet
@@ -56,7 +56,7 @@ RUN useradd --create-home --shell /bin/bash keeper \
 WORKDIR /app
 
 # Copy installed packages from builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy logging configuration first (changes less frequently)

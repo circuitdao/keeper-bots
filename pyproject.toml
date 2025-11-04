@@ -1,10 +1,16 @@
-[tool.poetry]
+[project]
 name = "keeper-bots"
 version = "0.2.7"
 description = "Keeper bots for Circuit protocol"
-authors = ["CircuitDAO"]
-license = "MIT"
+authors = [
+    {name = "CircuitDAO"}
+]
+license = {text = "MIT"}
 readme = "README.md"
+requires-python = "~3.11"
+dependencies = []
+
+[tool.poetry]
 packages = [{include = "keeper_bots"}]
 
 [tool.poetry.dependencies]
