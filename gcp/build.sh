@@ -24,20 +24,23 @@ usage() {
     echo "Options:"
     echo "  -p, --project-id PROJECT_ID    Google Cloud Project ID (default: $DEFAULT_PROJECT_ID)"
     echo "  -t, --tag TAG                  Docker image tag (default: $DEFAULT_TAG)"
-    echo "  -s, --skip-push               Skip pushing to registry"
-    echo "  -d, --dry-run                 Show what would be done without executing"
-    echo "  -h, --help                    Show this help message"
+    echo "  -c, --cloud-build              Use Google Cloud Build instead of local Docker"
+    echo "  -s, --skip-push                Skip pushing to registry (local build only)"
+    echo "  -d, --dry-run                  Show what would be done without executing"
+    echo "  -h, --help                     Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                            # Build and push with defaults"
-    echo "  $0 -p my-project -t v1.0.0    # Build with custom project and tag"
-    echo "  $0 -s                         # Build only, don't push"
-    echo "  $0 -d                         # Dry run to see what would happen"
+    echo "  $0                             # Build and push locally with defaults"
+    echo "  $0 -p my-project -t v1.0.0     # Build with custom project and tag"
+    echo "  $0 -c -t v1.0.0                # Build in cloud (fast on Apple Silicon)"
+    echo "  $0 -s                          # Build only, don't push"
+    echo "  $0 -d                          # Dry run to see what would happen"
 }
 
 # Default values
 PROJECT_ID="$DEFAULT_PROJECT_ID"
 TAG="$DEFAULT_TAG"
+USE_CLOUD_BUILD=false
 SKIP_PUSH=false
 DRY_RUN=false
 
@@ -51,6 +54,10 @@ while [[ $# -gt 0 ]]; do
         -t|--tag)
             TAG="$2"
             shift 2
+            ;;
+        -c|--cloud-build)
+            USE_CLOUD_BUILD=true
+            shift
             ;;
         -s|--skip-push)
             SKIP_PUSH=true
@@ -92,14 +99,30 @@ fi
 build_image() {
     if [[ "$DRY_RUN" == true ]]; then
         echo -e "${BLUE}[DRY RUN] Would build Docker image:${NC}"
-        echo -e "${BLUE}  Command: docker build --platform linux/amd64 -t $FULL_IMAGE_TAG .${NC}"
+        if [[ "$USE_CLOUD_BUILD" == true ]]; then
+            echo -e "${BLUE}  Command: gcloud builds submit --project $PROJECT_ID --tag $FULL_IMAGE_TAG --machine-type=n1-highcpu-8 .${NC}"
+        else
+            echo -e "${BLUE}  Command: docker build --platform linux/amd64 -t $FULL_IMAGE_TAG .${NC}"
+        fi
         return 0
     fi
     
-    echo -e "${YELLOW}🔨 Building Docker image with AMD64 platform...${NC}"
-    echo -e "${YELLOW}   Image: $FULL_IMAGE_TAG${NC}"
-    
-    docker build --platform linux/amd64 -t "$FULL_IMAGE_TAG" .
+    if [[ "$USE_CLOUD_BUILD" == true ]]; then
+        echo -e "${YELLOW}☁️  Building Docker image using Google Cloud Build...${NC}"
+        echo -e "${YELLOW}   Image: $FULL_IMAGE_TAG${NC}"
+        echo -e "${YELLOW}   This is faster than local builds on Apple Silicon!${NC}"
+        
+        gcloud builds submit \
+            --project "$PROJECT_ID" \
+            --tag "$FULL_IMAGE_TAG" \
+            --machine-type=n1-highcpu-8 \
+            .
+    else
+        echo -e "${YELLOW}🔨 Building Docker image with AMD64 platform...${NC}"
+        echo -e "${YELLOW}   Image: $FULL_IMAGE_TAG${NC}"
+        
+        docker build --platform linux/amd64 -t "$FULL_IMAGE_TAG" .
+    fi
     
     if [[ $? -eq 0 ]]; then
         echo -e "${GREEN}✓ Docker image built successfully${NC}"
@@ -111,6 +134,11 @@ build_image() {
 
 # Function to push Docker image
 push_image() {
+    if [[ "$USE_CLOUD_BUILD" == true ]]; then
+        echo -e "${YELLOW}⏭️  Skipping Docker push (Cloud Build automatically pushed the image)${NC}"
+        return 0
+    fi
+    
     if [[ "$SKIP_PUSH" == true ]]; then
         echo -e "${YELLOW}⏭️  Skipping Docker push (--skip-push flag used)${NC}"
         return 0
@@ -143,6 +171,11 @@ main() {
     echo -e "${YELLOW}   Image Tag: $TAG${NC}"
     echo -e "${YELLOW}   Full Image: $FULL_IMAGE_TAG${NC}"
     echo -e "${YELLOW}   Platform: linux/amd64${NC}"
+    if [[ "$USE_CLOUD_BUILD" == true ]]; then
+        echo -e "${YELLOW}   Build Method: Google Cloud Build ☁️${NC}"
+    else
+        echo -e "${YELLOW}   Build Method: Local Docker 🔨${NC}"
+    fi
     if [[ "$SKIP_PUSH" == true ]]; then
         echo -e "${YELLOW}   Push: Disabled${NC}"
     fi

@@ -171,10 +171,11 @@ async def run_announcer():
                 )
             else:
                 try:
-                    statutes_update_threshold_bps = int(statutes["implemented_statutes"]["ORACLE_PRICE_UPDATE_DELTA_BPS"])
+                    print("Got statutes", statutes)
+                    statutes_update_threshold_bps = int(statutes["implemented_statutes"]["ORACLE_PRICE_UPDATE_RATIO_BPS"])
                 except Exception as err:
                     # log error and continue with existing parameter
-                    log.error("Failed to get Statute ORACLE_PRICE_UPDATE_DELTA_BPS: %s", str(err))
+                    log.error("Failed to get Statute ORACLE_PRICE_UPDATE_RATIO_BPS: %s", str(err))
                     log.info(
                         "Continuing with existing update threshold and adjusted update threshold: %s bps, %s bps",
                         statutes_update_threshold_bps, UPDATE_THRESHOLD_BPS_ADJ
