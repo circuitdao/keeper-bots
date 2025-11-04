@@ -1,3 +1,15 @@
+## Configures an announcer to prevent penalization
+##
+## If only one announcer is found, the bot configures it whether approved or not.
+## If multiple announcers are found, the bot selects the first approved announcer that got returned
+## or, if no approved announcers were found, the first non-approved announcer returned.
+##
+## The bot monitors
+## - Statutes
+## - enacted bills
+## - the announcer itself
+## to configure parameters in a timely manner to prevent the announcer from becoming penalizable.
+
 import asyncio
 import os
 import httpx
@@ -32,6 +44,13 @@ RUN_INTERVAL = int(os.getenv("ANNOUNCER_CONFIGURE_RUN_INTERVAL"))  # Frequency (
 CONTINUE_DELAY = int(
     os.getenv("ANNOUNCER_CONFIGURE_CONTINUE_DELAY")
 )  # Wait (in seconds) before bot runs again after a failed run
+configure_unapproved_announcer = os.getenv("ANNOUNCER_CONFIGURE_CONFIGURE_UNAPPROVED_ANNOUNCER")
+if configure_unapproved_announcer == "true":
+    CONFIGURE_UNAPPROVED_ANNOUNCER = True
+elif configure_unapproved_announcer == "false":
+    CONFIGURE_UNAPPROVED_ANNOUNCER = False
+else:
+    raise ValueError("ANNOUNCER_CONFIGURE_CONFIGURE_UNAPPROVED_ANNOUNCER must be set to either 'true' or 'false'")
 DEPOSIT_BUFFER = int(
     float(os.getenv("ANNOUNCER_CONFIGURE_DEPOSIT_BUFFER")) * MOJOS_PER_XCH
 )  # additional deposit (in XCH) on top of MIN_DEPOSIT to keep in announcer
@@ -50,15 +69,17 @@ rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 async def run_announcer():
     log.info("Announcer configure bot started: %s", rpc_url)
     log.info(
-        "FEE_PER_COST=%s RUN_INTERVAL=%s CONTINUE_DELAY=%s DEPOSIT_BUFFER=%s DEPOSIT_BUFFER_REFILL_THRESHOLD=%s",
+        "FEE_PER_COST=%s RUN_INTERVAL=%s CONTINUE_DELAY=%s ANNOUNCER_CONFIGURE_CONFIGURE_UNAPPROVED_ANNOUNCER=%s DEPOSIT_BUFFER=%s DEPOSIT_BUFFER_REFILL_THRESHOLD=%s",
         fee_per_cost,
         RUN_INTERVAL,
         CONTINUE_DELAY,
+        CONFIGURE_UNAPPROVED_ANNOUNCER,
         DEPOSIT_BUFFER,
         DEPOSIT_BUFFER_REFILL_THRESHOLD,
     )
 
     while True:
+
         # show announcer
         try:
             announcers = await rpc_client.announcer_show()
@@ -75,16 +96,21 @@ async def run_announcer():
             log.error("No announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
-        approved_announcers = [x for x in announcers if x["approved"]]
-        if len(approved_announcers) < 1:
-            log.warning("No approved announcer found. Sleeping for %s seconds", CONTINUE_DELAY)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        if len(approved_announcers) > 1:
-            log.error("More than one approved announcer found")
-        announcer = approved_announcers[0]
-
-        log.info("Found an approved announcer. Name: %s  LauncherID: %s", announcer["name"], announcer["launcher_id"])
+        if len(announcers) > 1:
+            approved_announcers = [x for x in announcers if x["approved"]]
+            log.warning("%s announcers found, %s of them approved", len(announcers), len(approved_announcers))
+            if approved_announcers:
+                announcer = approved_announcers[0]
+            elif not CONFIGURE_UNAPPROVED_ANNOUNCER:
+                log.error("No approved announcer found. Sleeping for %s", RUN_INTERVAL)
+                await asyncio.sleep(RUN_INTERVAL)
+                continue
+            else:
+                announcer = announcers[0]
+            log.info("Selected an announcer. Name: %s. Launcher ID: %s. Approval status: %s", announcer["name"], announcer["launcher_id"], announcer["approved"])
+        else:
+            announcer = announcers[0]
+            log.info("Found 1 announcer. Name: %s. LauncherID: %s. Approval status: %s", announcer["name"], announcer["launcher_id"], announcer["approved"])
 
         # get Statutes
         try:
@@ -218,47 +244,53 @@ async def run_announcer():
         new_min_deposit = None
         new_deposit = None
         req_min_deposit = max(max_min_deposit, statutes_min_deposit)
-        min_acceptable_deposit = (
-            req_min_deposit  # + int((DEPOSIT_BUFFER * DEPOSIT_BUFFER_REFILL_THRESHOLD) if fee_per_cost else 0)
-        )
-        if announcer["min_deposit"] != req_min_deposit or announcer["deposit"] < min_acceptable_deposit:
+        min_acceptable_deposit = req_min_deposit  + int(DEPOSIT_BUFFER * DEPOSIT_BUFFER_REFILL_THRESHOLD)
+        max_acceptable_deposit = req_min_deposit + DEPOSIT_BUFFER
+        if (
+                announcer["min_deposit"] != req_min_deposit
+                or announcer["deposit"] < min_acceptable_deposit
+                or announcer["deposit"] > max_acceptable_deposit
+        ):
             new_min_deposit = req_min_deposit
             # check if we need to increase deposit
-            if announcer["deposit"] < min_acceptable_deposit:
+            if announcer["deposit"] < min_acceptable_deposit or announcer["deposit"] > max_acceptable_deposit:
                 new_deposit = new_min_deposit + DEPOSIT_BUFFER
-                log.info("Increasing announcer deposit: %s -> %s", announcer["deposit"], new_deposit)
-                # check if we have enough XCH to increase deposit
-                try:
-                    xch_balance = (await rpc_client.wallet_balances())["xch"]
-                except httpx.ReadTimeout as err:
-                    log.error("Failed to get wallet balance due to ReadTimeout: %s", err)
-                    await asyncio.sleep(CONTINUE_DELAY)
-                    continue
-                except ValueError as err:
-                    log.error("Failed to get wallet balance due to ValueError %s", err)
-                    await asyncio.sleep(CONTINUE_DELAY)
-                    continue
-                except Exception as err:
-                    log.error("Failed to get wallet balance %s", err)
-                    await asyncio.sleep(CONTINUE_DELAY)
-                    continue
-                req_xch_balance = new_deposit - announcer["deposit"]
-                if xch_balance < req_xch_balance:  # TODO: take tx fees into account
-                    json_msg = {
-                        "error_message": "Insufficient XCH balance to increase MIN_DEPOSIT on announcer",
-                        "announcer_launcher_id": announcer["launcher_id"],
-                        "announcer_name": announcer["name"],
-                        "DEPOSIT": announcer["deposit"],
-                        "desired_DEPOSIT": new_deposit,
-                        "MIN_DEPOSIT": announcer["min_deposit"],
-                        "desired_MIN_DEPOSIT": new_min_deposit,
-                        "xch_balance": xch_balance,
-                        "required_xch_balance": req_xch_balance,
-                        "required_xch_balance_delta": req_xch_balance - xch_balance,
-                    }
-                    log.error("Failed to configure announcer", extra=json_msg)
-                    await asyncio.sleep(CONTINUE_DELAY)
-                    continue
+                if new_deposit >= announcer["deposit"]:
+                    log.info("Increasing announcer deposit: %s -> %s", announcer["deposit"], new_deposit)
+                    # check if we have enough XCH to increase deposit
+                    try:
+                        xch_balance = (await rpc_client.wallet_balances())["xch"]
+                    except httpx.ReadTimeout as err:
+                        log.error("Failed to get wallet balance due to ReadTimeout: %s", err)
+                        await asyncio.sleep(CONTINUE_DELAY)
+                        continue
+                    except ValueError as err:
+                        log.error("Failed to get wallet balance due to ValueError %s", err)
+                        await asyncio.sleep(CONTINUE_DELAY)
+                        continue
+                    except Exception as err:
+                        log.error("Failed to get wallet balance %s", err)
+                        await asyncio.sleep(CONTINUE_DELAY)
+                        continue
+                    req_xch_balance = new_deposit - announcer["deposit"]
+                    if xch_balance < req_xch_balance:  # TODO: take tx fees into account
+                        json_msg = {
+                            "error_message": "Insufficient XCH balance to increase MIN_DEPOSIT on announcer",
+                            "announcer_launcher_id": announcer["launcher_id"],
+                            "announcer_name": announcer["name"],
+                            "DEPOSIT": announcer["deposit"],
+                            "desired_DEPOSIT": new_deposit,
+                            "MIN_DEPOSIT": announcer["min_deposit"],
+                            "desired_MIN_DEPOSIT": new_min_deposit,
+                            "xch_balance": xch_balance,
+                            "required_xch_balance": req_xch_balance,
+                            "required_xch_balance_delta": req_xch_balance - xch_balance,
+                        }
+                        log.error("Failed to configure announcer", extra=json_msg)
+                        await asyncio.sleep(CONTINUE_DELAY)
+                        continue
+                else:
+                    log.info("Reducing announcer deposit: %s -> %s", announcer["deposit"], new_deposit)
 
         # update new_price_ttl
         new_price_ttl = None

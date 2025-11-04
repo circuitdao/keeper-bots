@@ -27,12 +27,12 @@ ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(ENV_FILE, override=True)
 
 rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
-private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
+private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls vault
 add_sig_data = str(os.getenv("ADD_SIG_DATA")) # Additional signature data (depends on network)
 fee_per_cost = os.getenv("FEE_PER_COST") # Fee per cost for transactions
 CONTINUE_DELAY = int(os.getenv("LIQUIDATION_START_CONTINUE_DELAY")) # Wait (in seconds) before job runs again after a failed run
 RUN_INTERVAL = int(os.getenv("LIQUIDATION_START_RUN_INTERVAL")) # Wait (in seconds) before bot runs again
-
+INITIATOR_PUZZLE_HASH = os.getenv("LIQUIDATION_START_INITIATOR_PUZZLE_HASH") # puzzle hash to which liquidation incentive gets paid
 
 if not rpc_url:
     log.error("No URL found at which Circuit RPC server can be reached")
@@ -40,14 +40,46 @@ if not rpc_url:
 if not private_key:
     log.error("No master private key found")
     raise ValueError("No master private key found")
+if not INITIATOR_PUZZLE_HASH in [None, ""]:
+    try:
+        bytes32.fromhex(INITIATOR_PUZZLE_HASH)
+    except:
+        log.exception("Invalid INITIATOR_PUZZLE_HASH. Must be None or convertible to type bytes32")
+        raise
 
 rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
+async def start_liquidation(vault_name, initiator_puzzle_hash, rpc_client):
+    log.info("Liquidating vault %s", vault_name)
+    try:
+        response = await rpc_client.upkeep_vaults_liquidate(vault_name, target_puzzle_hash=initiator_puzzle_hash)
+    except httpx.ReadTimeout as err:
+        log.error("Failed to start liquidation auction for vault %s due to ReadTimeout: %s", vault_name, str(err))
+        raise
+    except ValueError as err:
+        log.error("Failed to start liquidation auction for vault %s due to ValueError: %s", vault_name, str(err))
+        raise
+    except Exception as err:
+        log.error("Failed to start liquidation auction for vault %s: %s", vault_name, str(err))
+        raise
+
+    log.info("Liquidation auction started for vault %s", vault_name)
+
+
 async def run_liquidation_start_bot():
 
-    my_puzzle_hash = puzzle_hash_for_synthetic_public_key(rpc_client.synthetic_public_keys[0]).hex()
+    if INITIATOR_PUZZLE_HASH in [None, ""]:
+        # receive initiator incentive at first synthetic pub key's puzzle hash
+        INNER_PUZZLE_HASH = puzzle_hash_for_synthetic_public_key(rpc_client.synthetic_public_keys[0]).hex()
 
-    log.info("Started liquidation start bot")
+    log.info("Started liquidation start bot: %s", rpc_url)
+    log.info(
+        "FEE_PER_COST=%s RUN_INTERVAL=%s CONTINUE_DELAY=%s INITIATOR_PUZZLE_HASH=%s",
+        fee_per_cost,
+        RUN_INTERVAL,
+        CONTINUE_DELAY,
+        INITIATOR_PUZZLE_HASH,
+    )
 
     while True:
 
@@ -77,33 +109,32 @@ async def run_liquidation_start_bot():
 
         log.info("%s vaults pending liquidation. Starting liquidation auctions", len(vaults_pending))
 
-        num_vaults_not_liquidated = 0
+        tasks = []
         for vault in vaults_pending:
-            try:
-                vault_name = vault["name"]
-                log.info("Starting liquidation auction for vault %s", vault_name)
-                response = await rpc_client.upkeep_vaults_liquidate(vault_name, target_puzzle_hash=my_puzzle_hash)
-            except httpx.ReadTimeout as err:
-                num_vaults_not_liquidated += 1
-                log.error("Failed to start liquidation auction for vault %s due to ReadTimeout: %s", vault_name, str(err))
-                continue
-            except ValueError as err:
-                num_vaults_not_liquidated += 1
-                log.error("Failed to start liquidation auction for vault %s due to ValueError: %s", vault_name, str(err))
-                continue
-            except Exception as err:
-                num_vaults_not_liquidated += 1
-                log.error("Failed to start liquidation auction for vault %s: %s", vault_name, str(err))
-                continue
+            task = asyncio.create_task(
+                start_liquidation(vault["name"], INITIATOR_PUZZLE_HASH, rpc_client)
+            )
+            tasks.append(task)
 
-            log.info("Liquidation auction started for vault %s", vault_name)
+        failed_tasks = 0
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                failed_tasks += 1
+                log.error(f"Liquidation start task {i} (vault {vaults_pending[i]['name']}) failed: {result}")
+            else:
+                log.info(f"Liquidation start task {i} (vault {vaults_pending[i]['name']}) succeeded: {result}")
 
-        if num_vaults_not_liquidated > 0:
-            log.info("Failed to start liquidation for %s of %s liquidatable vaults. Sleeping for %s seconds", num_vaults_not_liquidated, len(vaults_pending), CONTINUE_DELAY)
+        if failed_tasks > 0:
+            log.info(
+                "Failed to (re-)start liquidation of %s of %s liquidatable vaults. Sleeping for %s seconds",
+                failed_tasks, len(vaults_pending), CONTINUE_DELAY
+            )
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        log.info("Started liquidation for all %s liquidatable vaults. Sleeping for %s seconds", len(vaults_pending), RUN_INTERVAL)
+        # sleep until next run
+        log.info("(Re-)started liquidation of all %s liquidatable vaults. Sleeping for %s seconds", len(vaults_pending), RUN_INTERVAL)
         await asyncio.sleep(RUN_INTERVAL)
 
 

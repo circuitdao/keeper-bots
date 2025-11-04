@@ -1,4 +1,3 @@
-##
 ## Bot that bids in CircuitDAO liquidation auctions
 ##
 ## The bot:
@@ -429,7 +428,7 @@ async def run_liquidation_bid_bot():
         bid_not_possible = 0
         bid_not_profitable = 0
 
-        results = await asyncio.gather(*liquidation_tasks, return_exceptions=True) # LATER: impose a max run time on liquidation tasks so we don't get stuck?
+        results = await asyncio.gather(*liquidation_tasks, return_exceptions=True)
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 bid_failed += 1
