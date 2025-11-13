@@ -46,7 +46,7 @@ async def run_announcer():
     rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
     private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
     add_sig_data = str(os.getenv("ADD_SIG_DATA")) # Additional signature data (depends on network)
-    fee_per_cost = int(os.getenv("FEE_PER_COST")) # Fee per cost for transactions
+    fee_per_cost = os.getenv("FEE_PER_COST") # Fee per cost for transactions
     RUN_INTERVAL = int(os.getenv("ANNOUNCER_UPDATE_RUN_INTERVAL")) # Frequency (in seconds) with which to run bot
     CONTINUE_DELAY = int(os.getenv("ANNOUNCER_UPDATE_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
     TTL_BUFFER = int(os.getenv("ANNOUNCER_UPDATE_TTL_BUFFER")) # Update price no later than on next run after price expiry minus TTL buffer has passed
@@ -108,7 +108,7 @@ async def run_announcer():
                 log.error("Failed to load .env: %s", str(err))
             else:
                 # update parameters according to env vars loaded
-                fee_per_cost = int(os.getenv("FEE_PER_COST"))
+                fee_per_cost = os.getenv("FEE_PER_COST")
                 if rpc_client.fee_per_cost != fee_per_cost:
                     log.info("Updating fee per cost: %s -> %s", rpc_client.fee_per_cost, fee_per_cost)
                     rpc_client.fee_per_cost = fee_per_cost

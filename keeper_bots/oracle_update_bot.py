@@ -23,7 +23,7 @@ if os.path.exists("log_conf.yaml"):
 log = logging.getLogger("oracle_update_bot")
 
 RUN_INTERVAL = 1 * 20
-CONTINUE_DELAY = 10
+CONTINUE_DELAY = 50
 
 
 async def run_oracle():
@@ -55,7 +55,7 @@ async def run_oracle():
         "--fee-per-cost",
         "-fpc",
         type=str,
-        default=int(os.environ.get("FEE_PER_COST", 0)),
+        default=os.environ.get("FEE_PER_COST", 'fast'),
         help="Add transaction fee, set as fee per cost.",
     )
     args = parser.parse_args()
@@ -64,7 +64,7 @@ async def run_oracle():
         raise ValueError("No private key provided")
 
     rpc_client = CircuitRPCClient(
-        args.rpc_url, args.private_key, args.add_sig_data
+        args.rpc_url, args.private_key, args.add_sig_data, fee_per_cost=args.fee_per_cost
     )
     while True:
         await rpc_client.set_fee_per_cost()

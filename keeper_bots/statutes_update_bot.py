@@ -28,7 +28,7 @@ log = logging.getLogger("statutes_update_bot")
 
 
 RUN_INTERVAL = 1 * 20
-CONTINUE_DELAY = 10
+CONTINUE_DELAY = 40
 
 
 async def run_statutes():
@@ -57,7 +57,7 @@ async def run_statutes():
         "--fee-per-cost",
         "-fpc",
         type=str,
-        default=int(os.environ.get("FEE_PER_COST", 0)),
+        default=os.environ.get("FEE_PER_COST", 'fast'),
         help="Add transaction fee, set as fee per cost.",
     )
     args = parser.parse_args()
@@ -65,7 +65,7 @@ async def run_statutes():
     if not args.private_key:
         raise ValueError("No private key provided")
 
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data)
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, fee_per_cost=args.fee_per_cost)
     while True:
         await rpc_client.set_fee_per_cost()
         # Update Statutes price

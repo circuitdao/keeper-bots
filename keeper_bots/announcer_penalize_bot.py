@@ -30,7 +30,7 @@ load_dotenv(override=True)
 rpc_url = str(os.getenv("RPC_URL"))  # Base URL for Circuit RPC API server
 private_key = str(os.getenv("PRIVATE_KEY"))  # Private master key that controls announcer
 add_sig_data = os.getenv("ADD_SIG_DATA")  # Additional signature data (depends on network)
-fee_per_cost = int(os.getenv("FEE_PER_COST"))  # Fee per cost for transactions
+fee_per_cost = os.getenv("FEE_PER_COST")  # Fee per cost for transactions
 RUN_INTERVAL = int(os.getenv("ANNOUNCER_PENALIZE_RUN_INTERVAL"))  # Frequency (in seconds) with which to run bot
 CONTINUE_DELAY = int(os.getenv("ANNOUNCER_PENALIZE_CONTINUE_DELAY"))  # Wait (in seconds) before bot runs again after a failed run
 
