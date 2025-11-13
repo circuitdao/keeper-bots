@@ -19,7 +19,7 @@ python = "~3.13"
 httpx = {version = "^0.28.1", extras = ["http2"]}
 python-dotenv = "^1.0.0"
 autobahn = "^23.6.2"
-chia-blockchain = "2.5.7rc3"
+chia-blockchain = "2.5.7"
 zstandard = "^0.23.0"
 service-identity = "^24.1.0"
 #circuit-cli = {path = "../circuit-cli", develop = true}

@@ -446,18 +446,18 @@ bitarray = ">=3.0.0,<4.0"
 
 [[package]]
 name = "boto3"
-version = "1.40.70"
+version = "1.40.72"
 description = "The AWS SDK for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "boto3-1.40.70-py3-none-any.whl", hash = "sha256:e8c2f4f4cb36297270f1023ebe5b100333e0e88ab6457a9687d80143d2e15bf9"},
-    {file = "boto3-1.40.70.tar.gz", hash = "sha256:191443707b391232ed15676bf6bba7e53caec1e71aafa12ccad2e825c5ee15cc"},
+    {file = "boto3-1.40.72-py3-none-any.whl", hash = "sha256:1063a295712f2605d3e463e4dc1fe32fce17cf77a0f4d3bb14249d68533ee856"},
+    {file = "boto3-1.40.72.tar.gz", hash = "sha256:58d30dd5e046789a760db7a49f817650b8ff08d8d169e127976a61f44b7c59ad"},
 ]
 
 [package.dependencies]
-botocore = ">=1.40.70,<1.41.0"
+botocore = ">=1.40.72,<1.41.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.14.0,<0.15.0"
 
@@ -466,14 +466,14 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "botocore"
-version = "1.40.70"
+version = "1.40.72"
 description = "Low-level, data-driven core of boto 3."
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "botocore-1.40.70-py3-none-any.whl", hash = "sha256:4a394ad25f5d9f1ef0bed610365744523eeb5c22de6862ab25d8c93f9f6d295c"},
-    {file = "botocore-1.40.70.tar.gz", hash = "sha256:61b1f2cecd54d1b28a081116fa113b97bf4e17da57c62ae2c2751fe4c528af1f"},
+    {file = "botocore-1.40.72-py3-none-any.whl", hash = "sha256:4f859e5aaf871fe59aac431d6bba59cc0c8ed8a38da2a6a5345700bdc5c74b32"},
+    {file = "botocore-1.40.72.tar.gz", hash = "sha256:f69199ff6570695556e733fa052f2739e01e0c592c9b60f843f84c77ba3bcdf3"},
 ]
 
 [package.dependencies]
@@ -486,14 +486,14 @@ crt = ["awscrt (==0.27.6)"]
 
 [[package]]
 name = "certifi"
-version = "2025.10.5"
+version = "2025.11.12"
 description = "Python package for providing Mozilla's CA Bundle."
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
-    {file = "certifi-2025.10.5-py3-none-any.whl", hash = "sha256:0f212c2744a9bb6de0c56639a6f68afe01ecd92d91f14ae897c4fe7bbeeef0de"},
-    {file = "certifi-2025.10.5.tar.gz", hash = "sha256:47c09d31ccf2acf0be3f701ea53595ee7e0b8fa08801c6624be771df09ae7b43"},
+    {file = "certifi-2025.11.12-py3-none-any.whl", hash = "sha256:97de8790030bbd5c2d96b7ec782fc2f7820ef8dba6db909ccf95449f2d062d4b"},
+    {file = "certifi-2025.11.12.tar.gz", hash = "sha256:d8ab5478f2ecd78af242878415affce761ca6bc54a22a27e026d7c25357c3316"},
 ]
 
 [[package]]
@@ -736,14 +736,14 @@ dev = ["black (>=23.1.0)", "pytest (>=7.2.1)", "ruff (>=0.0.252)"]
 
 [[package]]
 name = "chia-blockchain"
-version = "2.5.7rc3"
+version = "2.5.7"
 description = "Chia blockchain full node, farmer, timelord, and wallet."
 optional = false
 python-versions = "<4,>=3.10"
 groups = ["main"]
 files = [
-    {file = "chia_blockchain-2.5.7rc3-py3-none-any.whl", hash = "sha256:692cdec06d154346da6c680f0e10b0d2db825acf546be995f31f132fb1bbd2a6"},
-    {file = "chia_blockchain-2.5.7rc3.tar.gz", hash = "sha256:cd0a13109abb8d258534bd28d02fa4081b2f1813422b7ebd1443c125487bc4d9"},
+    {file = "chia_blockchain-2.5.7-py3-none-any.whl", hash = "sha256:a5da62450bde16aa6c0da7dd8c7ab74c78be5f10771209f86f109ce362acb22d"},
+    {file = "chia_blockchain-2.5.7.tar.gz", hash = "sha256:f365ed8ddbe455f4a022618fc0dfd320331b4f073dcf9168bdb46cc4b9369022"},
 ]
 
 [package.dependencies]
@@ -991,14 +991,14 @@ files = []
 develop = false
 
 [package.dependencies]
-chia-blockchain = "2.5.7rc3"
+chia-blockchain = "2.5.7"
 httpx = "^0.28.1"
 
 [package.source]
 type = "git"
 url = "https://github.com/circuitdao/circuit-cli.git"
 reference = "main"
-resolved_reference = "1571cfc03dd0d3fd7725e2fd9bc3180c983baa6d"
+resolved_reference = "6ea08600096538cf5e8dce4984f7eec66b558bc2"
 
 [[package]]
 name = "click"
@@ -2544,15 +2544,15 @@ crt = ["botocore[crt] (>=1.37.4,<2.0a.0)"]
 
 [[package]]
 name = "secretstorage"
-version = "3.4.0"
+version = "3.4.1"
 description = "Python bindings to FreeDesktop.org Secret Service API"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 markers = "sys_platform == \"linux\""
 files = [
-    {file = "secretstorage-3.4.0-py3-none-any.whl", hash = "sha256:0e3b6265c2c63509fb7415717607e4b2c9ab767b7f344a57473b779ca13bd02e"},
-    {file = "secretstorage-3.4.0.tar.gz", hash = "sha256:c46e216d6815aff8a8a18706a2fbfd8d53fcbb0dce99301881687a1b0289ef7c"},
+    {file = "secretstorage-3.4.1-py3-none-any.whl", hash = "sha256:c55d57b4da3de568d8c3af89dad244ab24c35ca1da8625fc1b550edf005ebc41"},
+    {file = "secretstorage-3.4.1.tar.gz", hash = "sha256:a799acf5be9fb93db609ebaa4ab6e8f1f3ed5ae640e0fa732bfea59e9c3b50e8"},
 ]
 
 [package.dependencies]
@@ -3355,4 +3355,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "~3.13"
-content-hash = "d9834a82bd061fa10b4f05de13a092db279c73f620d5d462e7f2af42b2146310"
+content-hash = "9d20626c4b232c01ebe0aa0c160ae21eece8d526e12e7cc66ee1d05796cd46d2"

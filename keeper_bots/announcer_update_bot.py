@@ -1,20 +1,17 @@
 import asyncio
-import os
-import time
-import random
-import math
 import httpx
-import yaml
 import logging.config
-from datetime import datetime, timedelta
+import math
+import os
+import yaml
+from chia_rs import SpendBundle
 from dotenv import load_dotenv
 
-from chia_rs import SpendBundle
-
 from circuit_cli.client import CircuitRPCClient
-
+from keeper_bots.price_feeds.gate_oracle_feed import GateOracleFeed
+from keeper_bots.price_feeds.kucoin_oracle_feed import KucoinOracleFeed
 from keeper_bots.price_feeds.okx_oracle_feed import OkxOracleFeed
-from keeper_bots.utils import set_dotenv_variable
+from keeper_bots.price_feeds.price_aggregator import PriceAggregator
 
 # Import dynamic logging configuration
 try:
@@ -80,26 +77,55 @@ async def run_announcer():
     rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
     if "testnet" in rpc_url or "localhost" in rpc_url:
         sym = "XRP-USDT"
+        sym_gate = "XRP_USDT"  # Gate.io uses underscore
     else:
         sym = "XCH-USDT"
+        sym_gate = "XCH_USDT"  # Gate.io uses underscore
 
-    # OkxOracleFeed expects trading_pairs as a list and window_sec parameter
-    trading_pairs = [sym]
-    feed = OkxOracleFeed(
-        trading_pairs=trading_pairs,
-        window_sec=average_window,  # Use average_window (window_length) as the main window
-        startup_window_sec=startup_window,  # Use startup_window for startup period
+    # Initialize all three price feeds
+    okx_feed = OkxOracleFeed(
+        trading_pairs=[sym],
+        window_sec=average_window,
+        startup_window_sec=startup_window,
         min_notional=10
     )
 
-    async with feed as okx_feed:
+    gate_feed = GateOracleFeed(
+        trading_pairs=[sym_gate],
+        window_sec=average_window,
+        startup_window_sec=startup_window,
+        min_notional=10
+    )
+
+    kucoin_feed = KucoinOracleFeed(
+        trading_pairs=[sym],
+        window_sec=average_window,
+        startup_window_sec=startup_window,
+        min_notional=10
+    )
+
+    # Create price aggregator with all three feeds
+    # Requires at least 2 feeds to be valid, uses volume-weighted average
+    feeds = {
+        "OKX": okx_feed,
+        "Gate.io": gate_feed,
+        "KuCoin": kucoin_feed
+    }
+    aggregator = PriceAggregator(
+        feeds=feeds,
+        min_valid_feeds=2,
+        aggregation_method="volume_weighted"
+    )
+
+    log.info("Initialized price feeds: %s", ", ".join(aggregator.get_feed_names()))
+
+    async with okx_feed, gate_feed, kucoin_feed:
 
         cnt = 0  # Counter to artificially reduce oracle price over time for testing purposes
 
         while True:
 
             # update parameters
-            print("Re-load environment variables from file and update if there are any changes")
             try:
                 # load env variables, overriding existing values (if any)
                 load_dotenv(override=True)
@@ -143,10 +169,19 @@ async def run_announcer():
                 
                 # Check if window parameters have changed and update if necessary
                 if startup_window != new_startup_window or average_window != new_average_window:
-                    log.info("Updating window parameters: startup_window %s -> %s, average_window %s -> %s", 
+                    log.info("Updating window parameters: startup_window %s -> %s, average_window %s -> %s",
                             startup_window, new_startup_window, average_window, new_average_window)
                     try:
+                        # Update all three feeds
                         okx_feed.update_parameters(
+                            window_sec=new_average_window,
+                            startup_window_sec=new_startup_window
+                        )
+                        gate_feed.update_parameters(
+                            window_sec=new_average_window,
+                            startup_window_sec=new_startup_window
+                        )
+                        kucoin_feed.update_parameters(
                             window_sec=new_average_window,
                             startup_window_sec=new_startup_window
                         )
@@ -171,7 +206,6 @@ async def run_announcer():
                 )
             else:
                 try:
-                    print("Got statutes", statutes)
                     statutes_update_threshold_bps = int(statutes["implemented_statutes"]["ORACLE_PRICE_UPDATE_RATIO_BPS"])
                 except Exception as err:
                     # log error and continue with existing parameter
@@ -217,21 +251,21 @@ async def run_announcer():
                 log.info("Found an approved announcer. Name: %s  LauncherID: %s", announcer['name'],
                          announcer['launcher_id'])
 
-            # get latest volume-weighted XCH/USD price
+            # get latest volume-weighted XCH/USD price from aggregator
             try:
-                price = await okx_feed.get_price()
-            except Exception as err:  # (TypeError, ValueError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError):
-                log.error("Failed to fetch latest price:", err)
+                price = await aggregator.get_aggregated_price()
+            except Exception as err:
+                log.error("Failed to fetch latest price from aggregator: %s", err)
                 price = announcer["price"]  # if failed to get price from feed, re-publish announcer price to prevent expiry
                 log.info("Using existing price: %.2f", price / PRICE_PRECISION)
             else:
                 if math.isnan(price):
-                    price = announcer["price"]  # if still ramping up, re-publish announcer price to prevent expiry
-                    log.info("No price received from OKX feed, using existing price: %.2f", price / PRICE_PRECISION)
+                    price = announcer["price"]  # if still ramping up or insufficient feeds, re-publish announcer price to prevent expiry
+                    log.info("No valid aggregated price received (feeds ramping up or insufficient), using existing price: %.2f", price / PRICE_PRECISION)
                 else:
                     # price = int(PRICE_PRECISION * price * 0.99**cnt) # reduce oralce price by 1% per iteration #random.randint(10000, 12000)  # await fetch_okx_price()
                     price = int(PRICE_PRECISION * price)
-                    log.info("Fetched latest price: %.2f. Current price: %.2f", price / PRICE_PRECISION, announcer["price"] / 100.0)
+                    log.info("Fetched latest aggregated price: %.2f. Current price: %.2f", price / PRICE_PRECISION, announcer["price"] / 100.0)
                     cnt += 1
 
             # update announcer price
