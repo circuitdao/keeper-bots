@@ -32,6 +32,7 @@ MANIFEST
 **/#*#
 **/.#*
 
-# Ignore dotenv files
+# Ignore dotenv files, except example file
 **/.env*
+!.env.example
 .idea
