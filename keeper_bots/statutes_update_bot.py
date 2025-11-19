@@ -67,12 +67,12 @@ async def run_statutes():
 
     rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, fee_per_cost=args.fee_per_cost)
     while True:
-        await rpc_client.set_fee_per_cost()
         # Update Statutes price
         log.info("Updating Statutes Price")
 
         try:
-            data = await rpc_client.statutes_update()
+            await rpc_client.set_fee_per_cost()
+            await rpc_client.statutes_update()
         except httpx.ReadTimeout as err:
             log.exception("Failed to update Statutes Price due to ReadTimeout")
             await asyncio.sleep(CONTINUE_DELAY)

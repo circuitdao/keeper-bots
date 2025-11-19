@@ -67,11 +67,11 @@ async def run_oracle():
         args.rpc_url, args.private_key, args.add_sig_data, fee_per_cost=args.fee_per_cost
     )
     while True:
-        await rpc_client.set_fee_per_cost()
         # update oracle
         log.info("Updating Oracle price")
 
         try:
+            await rpc_client.set_fee_per_cost()
             data = await rpc_client.oracle_update()
         except httpx.ReadTimeout as err:
             log.error("Failed to update Oracle due to ReadTimeout: %s", err)

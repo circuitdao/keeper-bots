@@ -130,7 +130,7 @@ async def run_announcer_rewards_bot():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        if info["action_executable"] == True:
+        if info["action_executable"]:
             log.info("Distributing rewards")
             try:
                 response = await rpc_client.upkeep_registry_reward(target_puzzle_hash=TARGET_PUZZLE_HASH)
