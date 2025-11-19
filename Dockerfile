@@ -16,20 +16,24 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     POETRY_NO_INTERACTION=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    POETRY_CACHE_DIR=/tmp/poetry_cache \
+    POETRY_VIRTUALENVS_CREATE=false
 
 # Set work directory
 WORKDIR /app
 
 # Install Poetry in isolated location to prevent it from being removed during sync
-RUN pip install --user poetry==2.1.4
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user --no-warn-script-location poetry==2.1.4
 ENV PATH="/root/.local/bin:$PATH"
 
 # Copy poetry files first for better caching
 COPY pyproject.toml poetry.lock ./
 
-# Configure poetry and install dependencies
-RUN poetry config virtualenvs.create false \
+# Configure poetry and install dependencies with cache mount
+RUN --mount=type=cache,target=/tmp/poetry_cache \
+    --mount=type=cache,target=/root/.cache/pip \
+    poetry config virtualenvs.create false \
     && poetry sync --only=main --no-root --no-interaction --no-ansi
 
 # Production stage

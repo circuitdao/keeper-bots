@@ -38,6 +38,13 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+    - name: Extract package version from pyproject.toml
+      id: package_version
+      run: |
+        VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Package version: $VERSION"
+
     - name: Extract metadata (tags, labels) for Docker
       id: meta
       uses: docker/metadata-action@v5
@@ -48,6 +55,7 @@ jobs:
           type=ref,event=pr
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=${{ steps.package_version.outputs.version }},enable={{is_default_branch}}
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
 
@@ -63,7 +71,7 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+        platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
 
     - name: Build and push Docker image (testnet)
       uses: docker/build-push-action@v5
@@ -76,10 +84,11 @@ jobs:
         tags: |
           ${{ env.REGISTRY }}/circuitdao/${{ env.IMAGE_NAME }}:testnet
           ${{ env.REGISTRY }}/circuitdao/${{ env.IMAGE_NAME }}:${{ github.sha }}-testnet
+          ${{ github.event_name != 'pull_request' && format('{0}/circuitdao/{1}:{2}-testnet', env.REGISTRY, env.IMAGE_NAME, steps.package_version.outputs.version) || '' }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+        platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
 
     - name: Run health check on built image
       if: github.event_name != 'pull_request'
