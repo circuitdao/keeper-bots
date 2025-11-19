@@ -70,7 +70,8 @@ loggers:
   announcer_update_bot: *bot_logger_config
   oracle_update_bot: *bot_logger_config
   statutes_update_bot: *bot_logger_config
-  governance_bot: *bot_logger_config
+  governance_veto_bot: *bot_logger_config
+  governance_implement_bot: *bot_logger_config
   recharge_start_settle_bot: *bot_logger_config
   savings_bot: *bot_logger_config
   surplus_start_settle_bot: *bot_logger_config
