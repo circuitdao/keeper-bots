@@ -6,11 +6,11 @@
 
 import os
 import asyncio
-import argparse
 import httpx
 import yaml
 import logging.config
 from dotenv import load_dotenv
+
 
 from circuit_cli.client import APIError, CircuitRPCClient
 
