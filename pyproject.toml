@@ -1,6 +1,6 @@
 [project]
 name = "keeper-bots"
-version = "0.2.24"
+version = "0.2.25"
 description = "Keeper bots for Circuit protocol"
 authors = [
     {name = "CircuitDAO"}
