@@ -129,17 +129,17 @@ async def run_announcer():
             continue
 
         try:
-            statutes_min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"])
+            statutes_min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT_MOJOS"])
         except KeyError as err:
-            log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT due to KeyError: %s", err)
+            log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT_MOJOS due to KeyError: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except ValueError as err:
-            log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT due to ValueError: %s", err)
+            log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT_MOJOS due to ValueError: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
         except Exception as err:
-            log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT: %s", err)
+            log.error("Failed to get value of Statute ANNOUNCER_MINIMUM_DEPOSIT_MOJOS: %s", err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 

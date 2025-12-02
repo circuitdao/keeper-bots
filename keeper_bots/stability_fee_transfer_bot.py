@@ -32,7 +32,7 @@ load_dotenv(override=True)
 rpc_url = str(os.getenv("RPC_URL"))  # Base URL for Circuit RPC API server
 private_key = str(os.getenv("PRIVATE_KEY"))  # Private master key that controls announcer
 add_sig_data = os.getenv("ADD_SIG_DATA")  # Additional signature data (depends on network)
-fee_per_cost = int(os.getenv("FEE_PER_COST"))  # Fee per cost for transactions
+fee_per_cost = os.getenv("FEE_PER_COST")  # Fee per cost for transactions
 RUN_INTERVAL = int(os.getenv("SF_TRANSFER_RUN_INTERVAL"))  # Frequency (in seconds) with which to run bot
 CONTINUE_DELAY = int(os.getenv("SF_TRANSFER_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
 
@@ -55,7 +55,7 @@ async def run_stability_fee_transfer_bot():
     rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
     private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
     add_sig_data = str(os.getenv("ADD_SIG_DATA")) # Additional signature data (depends on network)
-    fee_per_cost = int(os.getenv("FEE_PER_COST")) # Fee per cost for transactions
+    fee_per_cost = os.getenv("FEE_PER_COST") # Fee per cost for transactions
     RUN_INTERVAL = int(os.getenv("SF_TRANSFER_RUN_INTERVAL")) # Frequency (in seconds) with which to run bot
     CONTINUE_DELAY = int(os.getenv("SF_TRANSFER_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
     if not rpc_url:
@@ -95,7 +95,7 @@ async def run_stability_fee_transfer_bot():
 
             # transfer SFs
             try:
-                response = await rpc_client.upkeep_vaults_transfer(coin_name=vault_name)
+                await rpc_client.upkeep_vaults_transfer(coin_name=vault_name)
             except httpx.ReadTimeout as err:
                 log.error("Failed to transfer Stability Fees from vault %s due to ReadTimeout:", vault_name, err)
                 failed_transfers += 1
@@ -105,7 +105,7 @@ async def run_stability_fee_transfer_bot():
                 failed_transfers += 1
                 continue
             except Exception as err:
-                log.error("Failed to transfer Stability Fees from vault %s:", vault_name, err)
+                log.exception("Failed to transfer Stability Fees from vault %s:", vault_name)
                 failed_transfers += 1
                 continue
 
@@ -118,9 +118,6 @@ async def run_stability_fee_transfer_bot():
 
         log.info(f"Successfully transferred SFs from all {len(vaults)} vaults that had transferable SFs. Sleeping for {RUN_INTERVAL} seconds")
         await asyncio.sleep(RUN_INTERVAL)
-
-        #final_bundle: SpendBundle = SpendBundle.from_json_dict(response["bundle"])
-        #coin_name = final_bundle.additions()[0].name().hex()
 
 
 if __name__ == '__main__':
