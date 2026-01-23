@@ -1,16 +1,10 @@
-[project]
+[tool.poetry]
 name = "keeper-bots"
 version = "0.2.25"
 description = "Keeper bots for Circuit protocol"
-authors = [
-    {name = "CircuitDAO"}
-]
-license = {text = "MIT"}
+authors = ["CircuitDAO"]
+license = "MIT"
 readme = "README.md"
-requires-python = "~3.13"
-dependencies = []
-
-[tool.poetry]
 packages = [{include = "keeper_bots"}]
 
 [tool.poetry.dependencies]
@@ -21,14 +15,15 @@ autobahn = "^23.6.2"
 chia-blockchain = "2.5.7"
 zstandard = "^0.23.0"
 service-identity = "^24.1.0"
-#circuit-cli = {path = "../circuit-cli", develop = true}
 circuit-cli = {git = "https://github.com/circuitdao/circuit-cli.git", branch = "main"}
+#circuit-cli = {path = "../circuit-cli", develop = true}
 coinbase-advanced-py = "^1.8.2"
 python-json-logger = "^3.3.0"
-#python-okx-async = {path = "../python-okx-async", develop = true}
 python-okx-async = {git = "https://github.com/circuitdao/python-okx-async.git", branch = "master"}
+#python-okx-async = {path = "../python-okx-async", develop = true}
 apscheduler = "^3.11.0"
 pytz = "^2025.2"
+sortedcontainers = "^2.4.0"
 
 [[tool.poetry.source]]
 name = "testpypi"
