@@ -430,6 +430,7 @@ async def liquidate_vault(
                 log.error(
                     "Failed to place market sell order on OKX. Response: %s. Retrying in %s seconds",
                     json.dumps(response),
+                    retry_delay,
                 )
                 await asyncio.sleep(retry_delay)
                 continue
