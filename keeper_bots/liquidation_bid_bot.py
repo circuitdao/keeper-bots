@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from dotenv import load_dotenv
 
+from chia.types.blockchain_format.program import Program
+
 from circuit_cli.client import CircuitRPCClient
 
 # NOTE: Comment out maxRetries parameter in WsClientFactory.py
@@ -27,7 +29,6 @@ from okx_async.AsyncAccount import AsyncAccountAPI
 
 from keeper_bots.okx_order_book import OkxOrderBook
 from keeper_bots.utils import SPOT
-
 
 PRICE_PRECISION = 100
 MOJOS_PER_XCH = 10**12
@@ -76,6 +77,7 @@ CONTINUE_DELAY = int(
 RUN_INTERVAL = int(
     os.getenv("LIQUIDATION_RUN_INTERVAL")
 )  # Wait (in seconds) before job runs again after a failed interest withdrawal due to insufficiently large treasury coins
+LIQUIDATION_COLLATERAL_RATIO_PCT = int(os.getenv("LIQUIDATION_COLLATERAL_RATIO_PCT"))
 max_bid_amount = os.getenv(
     "LIQUIDATION_MAX_BID_AMOUNT"
 )  # max bid amount (in mBYC). If None, there's no cap on bid amount
@@ -344,7 +346,7 @@ async def liquidate_vault(
         return BidFail.NOT_PROFITABLE
     else:
         log.info(
-            f"Hedge amount over bid amount ratio sufficiently large: {(1 + realizable_margin) * 100:.1f}% < {(1 + MARGIN) * 100:.1f}% "
+            f"Hedge amount over bid amount ratio sufficiently large: {(1 + realizable_margin) * 100:.1f}% >= {(1 + MARGIN) * 100:.1f}% "
             f"({hedge_amount} {proxy_symbol} > {bid_amount * (1 + MARGIN) / MCAT} {stablecoin_symbol}. Placing bid of {bid_amount / MCAT:.3f} {stablecoin_symbol}"
         )
         # bid for collateral
@@ -537,7 +539,15 @@ async def liquidate_vault(
             base_delta = (
                 collateral_to_receive - total_fill_volume + okx_fee
             )  # LATER: add on-chain tx fee
-            pnl = quote_delta + base_delta * okx_order_book.mid_price()
+            price = okx_order_book.mid_price()
+            if price is None:
+                log.error(
+                    "Order book mid price unavailable. Cannot calculate PnL. Sleeping for %s seconds",
+                    CONTINUE_DELAY,
+                )
+                return BidFail.NOT_RECONCILED
+
+            pnl = quote_delta + base_delta * price
 
             log.info(
                 "PnL: %.2f USD. Remaining %s position: %.3f. Remaining stablecoin position: %.3f",
@@ -677,7 +687,7 @@ async def run_liquidation_bid_bot():
 
         vaults_in_liquidation = state.get("vaults_in_liquidation", [])
 
-        # get OKX xch balance
+        # get OKX xch balance. max amount we can bid depends on much much XCH we have to hedge
         try:
             response = await accountAPI.get_account_balance(
                 ccy=collateral_symbol,
@@ -713,27 +723,27 @@ async def run_liquidation_bid_bot():
                     response["data"][0]["details"][0]["cashBal"]
                 )  # in XCH
 
+        # get wallet byc balance
+        try:
+            balances = await rpc_client.wallet_balances()
+        except httpx.HTTPStatusError as err:
+            log.error("Failed to get wallet balances due to HTTPStatusError: %s", err)
+            available_byc_amount = None
+        except httpx.ReadTimeout as err:
+            log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
+            available_byc_amount = None
+        except ValueError as err:
+            log.error("Failed to get wallet balances due to ValueError: %s", err)
+            available_byc_amount = None
+        except Exception as err:
+            log.error("Failed to get wallet balances: %s", err)
+            available_byc_amount = None
+        else:
+            available_byc_amount = balances["byc"]
+
         if not vaults_in_liquidation:
             log.info("No vaults in liquidation")
             # Print account balances
-            # get wallet byc balance
-            try:
-                balances = await rpc_client.wallet_balances()
-            except httpx.HTTPStatusError as err:
-                log.error(
-                    "Failed to get wallet balances due to HTTPStatusError: %s", err
-                )
-            except httpx.ReadTimeout as err:
-                log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
-                available_byc_amount = None
-            except ValueError as err:
-                log.error("Failed to get wallet balances due to ValueError: %s", err)
-                available_byc_amount = None
-            except Exception as err:
-                log.error("Failed to get wallet balances: %s", err)
-                available_byc_amount = None
-            else:
-                available_byc_amount = balances["byc"]
 
             log.info(
                 "Wallet balance: %s. OKX balance: %s. Sleeping for %s seconds",
@@ -750,7 +760,7 @@ async def run_liquidation_bid_bot():
             continue
 
         log.info(
-            "%s vaults in liquidation.",
+            "Found %s vaults in liquidation.",
             len(vaults_in_liquidation),
         )
 
@@ -761,11 +771,86 @@ async def run_liquidation_bid_bot():
             )
             continue
 
-        # Check how much XCH we have on OKX. Then borrow an appropriate amount of BYC
-        # TODO
-        # debt = 0
-        # for vault in vaults_in_liquidation:
-        #    debt += vault["principal"]
+        # Check how much debt there is. Then borrow an appropriate amount of BYC
+        price = okx_order_book.mid_price()  # conservative estimate of market price
+        if price is None:
+            log.error(
+                "Order book mid price unavailable. Sleeping for %s seconds",
+                CONTINUE_DELAY,
+            )
+            continue
+
+        debts = []
+        for vault in vaults_in_liquidation:
+            auction_state = Program.fromhex(vault["auction_state"])
+            initiator_incentive_balance = auction_state.at("rrrrrf").as_int()
+            byc_to_treasury_balance = auction_state.at("rrrrrrrf").as_int()
+            byc_to_melt_balance = auction_state.at("rrrrrrrrf").as_int()
+            debts.append(
+                initiator_incentive_balance
+                + byc_to_treasury_balance
+                + byc_to_melt_balance
+            )
+            start_price = auction_state.at("rf").as_int() / PRICE_PRECISION
+            if start_price < price:
+                price = start_price
+
+        debt = sum(debts)
+
+        # TODO: split wallet BYC balance into coins large enough for each auction.
+        #  then bid with those specific coins.
+
+        if available_byc_amount < debt:
+            borrow_amount = max(
+                100, (debt - available_byc_amount) / MCAT
+            )  # in BYC # TODO: needs to result in at least min debt
+            deposit_amount = (
+                borrow_amount * (LIQUIDATION_COLLATERAL_RATIO_PCT / 100) / price
+            )  # in XCH
+
+            log.info(
+                "Depositing %s XCH to borrow %s BYC to bid on debt. Existing balance: %s BYC",
+                deposit_amount,
+                borrow_amount,
+                available_byc_amount,
+            )
+
+            # borrow enough BYC to liquidate all vaults
+            # if borrowing fails, too bad, we proceed to liquidate with what BYC we have
+            try:
+                response = await rpc_client.vault_deposit(deposit_amount)
+            except httpx.HTTPStatusError as err:
+                log.error("Failed to deposit to vault due to HTTPStatusError: %s", err)
+            except httpx.ReadTimeout as err:
+                log.error("Failed to deposit to vault due to ReadTimeout: %s", err)
+            except ValueError as err:
+                log.error("Failed to deposit to vault due to ValueError: %s", err)
+            except Exception as err:
+                log.error("Failed to deposit to vault: %s", err)
+            else:
+                if response.get("status") != "success":
+                    log.error("Failed to deposit %s XCH: %s", deposit_amount, response)
+                else:
+                    log.info("Deposited %s XCH", deposit_amount)
+                    try:
+                        response = await rpc_client.vault_borrow(borrow_amount)
+                    except httpx.HTTPStatusError as err:
+                        log.error(
+                            "Failed to borrow BYC due to HTTPStatusError: %s", err
+                        )
+                    except httpx.ReadTimeout as err:
+                        log.error("Failed to borrow BYC due to ReadTimeout: %s", err)
+                    except ValueError as err:
+                        log.error("Failed to borrow BYC due to ValueError: %s", err)
+                    except Exception as err:
+                        log.error("Failed to borrow BYC: %s", err)
+                    if response.get("status") != "success":
+                        log.error(
+                            "Failed to borrow %s BYC: %s", borrow_amount, response
+                        )
+                    else:
+                        log.info("Borrowed %s BYC", borrow_amount)
+                        available_byc_amount += borrow_amount
 
         liquidation_tasks = []
         for vault in vaults_in_liquidation:
