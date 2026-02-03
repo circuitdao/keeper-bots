@@ -21,7 +21,8 @@ class PriceAggregator:
         max_single_feed_weight=0.6,
         volume_spike_threshold=3.0,
         volume_history_length=20,
-        price_deviation_threshold=0.05
+        price_deviation_threshold=0.05,
+        require_connected=True
     ):
         """
         Initialize the price aggregator with manipulation protection.
@@ -34,6 +35,7 @@ class PriceAggregator:
             volume_spike_threshold: Volume spike multiplier to trigger capping (3.0 = 3x normal)
             volume_history_length: Number of historical volume samples to track
             price_deviation_threshold: Max price deviation from median before flagging (5%)
+            require_connected: Exclude feeds with dropped connections (default: True)
         """
         self.feeds = feeds
         self.min_valid_feeds = min_valid_feeds
@@ -41,6 +43,7 @@ class PriceAggregator:
         self.max_single_feed_weight = max_single_feed_weight
         self.volume_spike_threshold = volume_spike_threshold
         self.price_deviation_threshold = price_deviation_threshold
+        self.require_connected = require_connected
 
         # Track volume history for each feed
         self.volume_history = {feed_name: deque(maxlen=volume_history_length) for feed_name in feeds.keys()}
@@ -61,6 +64,15 @@ class PriceAggregator:
 
         # Collect prices from all feeds
         for feed_name, feed in self.feeds.items():
+            # Check connection health first
+            if self.require_connected and hasattr(feed, 'is_connected') and not feed.is_connected():
+                timeout_secs = getattr(feed, 'connection_timeout_seconds', 60)
+                log.warning(
+                    "Feed %s has no WebSocket messages for >%ds, excluding from aggregation",
+                    feed_name, timeout_secs
+                )
+                continue
+
             try:
                 price, meta = await feed.get_price()
 
@@ -72,19 +84,23 @@ class PriceAggregator:
                 # Get trade count for volume weighting
                 trade_count = meta.get("trades", 0) if meta else 0
 
+                # Check connection status for logging
+                is_connected = feed.is_connected() if hasattr(feed, 'is_connected') else "N/A"
+
                 valid_prices.append({
                     "feed": feed_name,
                     "price": price,
                     "trades": trade_count,
-                    "meta": meta
+                    "meta": meta,
+                    "connected": is_connected
                 })
 
                 # Update volume history
                 self.volume_history[feed_name].append(trade_count)
 
                 log.debug(
-                    "Feed %s: price=%.2f, trades=%d, meta=%s",
-                    feed_name, price, trade_count, meta
+                    "Feed %s: connected=%s, price=%.2f, trades=%d, meta=%s",
+                    feed_name, is_connected, price, trade_count, meta
                 )
 
             except Exception as err:
@@ -119,7 +135,7 @@ class PriceAggregator:
             self.aggregation_method,
             aggregated_price,
             len(valid_prices),
-            ", ".join([f"{p['feed']}=${p['price']:.2f}(trades={p['trades']},weight={p.get('adjusted_weight', 0):.2%})" for p in valid_prices])
+            ", ".join([f"{p['feed']}=${p['price']:.2f}(connected={p.get('connected', 'N/A')},trades={p['trades']},weight={p.get('adjusted_weight', 0):.2%})" for p in valid_prices])
         )
 
         return aggregated_price

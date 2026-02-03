@@ -84,6 +84,9 @@ async def kucoin_ws(oracle, feed_instance=None):
                     async for msg in ws:
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
+                        # Track any WebSocket message for connection health
+                        if feed_instance is not None:
+                            feed_instance.last_message_ts = time.time()
 
                         data = json.loads(msg.data)
                         msg_type = data.get("type")

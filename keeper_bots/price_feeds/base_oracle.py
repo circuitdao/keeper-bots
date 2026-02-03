@@ -224,16 +224,44 @@ class BaseOracleFeed:
         self._tasks = []
         self.book_mids = {}  # Store current book mid prices for fallback
 
+        # Connection health tracking
+        self.last_message_ts = 0  # Timestamp of last WebSocket message received
+        self.connection_timeout_seconds = 900  # 15 minutes - feed excluded if no messages for this duration
+
+    def is_connected(self):
+        """Check if feed is receiving WebSocket messages within timeout."""
+        if self.last_message_ts == 0:
+            return False  # Never received data
+        return (time.time() - self.last_message_ts) < self.connection_timeout_seconds
+
     async def __aenter__(self):
         """Start the feed tasks."""
         logging.info("Starting %s Oracle Feed...", self.exchange_name)
         self._tasks = [
             asyncio.create_task(self._create_websocket_task()),
-            asyncio.create_task(usdt_price_fetcher(self.oracle))
+            asyncio.create_task(usdt_price_fetcher(self.oracle)),
+            asyncio.create_task(self._connection_watchdog())
         ]
         # Give it a moment to connect and start receiving data
         await asyncio.sleep(2)
         return self
+
+    async def _connection_watchdog(self):
+        """Monitor connection health and trigger reconnection if needed."""
+        while True:
+            await asyncio.sleep(10)  # Check every 10 seconds
+            if self.last_message_ts > 0:
+                silence_duration = time.time() - self.last_message_ts
+                if silence_duration > self.connection_timeout_seconds:
+                    logging.error(
+                        "%s feed silent for %.1fs (timeout: %ds), triggering reconnection",
+                        self.exchange_name, silence_duration, self.connection_timeout_seconds
+                    )
+                    # Cancel WebSocket task to trigger reconnection
+                    if self._tasks and len(self._tasks) > 0:
+                        self._tasks[0].cancel()
+                        # Reset to avoid repeated cancellations
+                        self.last_message_ts = 0
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         """Stop the feed tasks."""
