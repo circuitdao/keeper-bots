@@ -801,12 +801,30 @@ async def run_liquidation_bid_bot():
         #  then bid with those specific coins.
 
         if available_byc_amount < debt:
+            # get min debt amount from Statutes
+            min_debt = 100 * MCAT  # fall back amount
+            try:
+                statutes = await rpc_client.statutes_list()
+            except httpx.HTTPStatusError as err:
+                log.error("Failed to get Statutes due to HTTPStatusError: %s", err)
+            except httpx.ReadTimeout as err:
+                log.error("Failed to get Statutes due to ReadTimeout: %s", err)
+            except ValueError as err:
+                log.error("Failed to get Statutes due to ValueError: %s", err)
+            except Exception as err:
+                log.error("Failed to get Statutes: %s", err)
+            else:
+                min_debt = int(statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"])
+
             borrow_amount = max(
-                100, (debt - available_byc_amount) / MCAT
-            )  # in BYC # TODO: needs to result in at least min debt
-            deposit_amount = (
-                borrow_amount * (LIQUIDATION_COLLATERAL_RATIO_PCT / 100) / price
-            )  # in XCH
+                min_debt, debt - available_byc_amount
+            )  # in mBYC # TODO: needs to result in at least min debt
+            deposit_amount = int(
+                MOJOS_PER_XCH
+                * (borrow_amount / MCAT)
+                * (LIQUIDATION_COLLATERAL_RATIO_PCT / 100)
+                / price
+            )  # in mojos
 
             log.info(
                 "Depositing %s XCH to borrow %s BYC to bid on debt. Existing balance: %s BYC",
@@ -829,11 +847,15 @@ async def run_liquidation_bid_bot():
                 log.error("Failed to deposit to vault: %s", err)
             else:
                 if response.get("status") != "success":
-                    log.error("Failed to deposit %s XCH: %s", deposit_amount, response)
+                    log.error(
+                        "Failed to deposit %.12f XCH: %s",
+                        deposit_amount / MOJOS_PER_XCH,
+                        response,
+                    )
                 else:
-                    log.info("Deposited %s XCH", deposit_amount)
+                    log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
                     try:
-                        response = await rpc_client.vault_borrow(borrow_amount * 1000)
+                        response = await rpc_client.vault_borrow(borrow_amount)
                     except httpx.HTTPStatusError as err:
                         log.error(
                             "Failed to borrow BYC due to HTTPStatusError: %s", err
@@ -846,10 +868,12 @@ async def run_liquidation_bid_bot():
                         log.error("Failed to borrow BYC: %s", err)
                     if response.get("status") != "success":
                         log.error(
-                            "Failed to borrow %s BYC: %s", borrow_amount, response
+                            "Failed to borrow %.3f BYC: %s",
+                            borrow_amount / MCAT,
+                            response,
                         )
                     else:
-                        log.info("Borrowed %s BYC", borrow_amount)
+                        log.info("Borrowed %.3f BYC", borrow_amount / MCAT)
                         available_byc_amount += borrow_amount
 
         liquidation_tasks = []

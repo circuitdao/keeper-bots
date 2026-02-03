@@ -186,14 +186,14 @@ class OkxOrderBook:
                                 # Remove price level if volume is 0
                                 self.book[side].pop(price_float, None)
 
-                    # Validate order book depth
-                    asks_depth = len(self.book.get("asks", {}))
-                    bids_depth = len(self.book.get("bids", {}))
-
-                    if asks_depth != 400:
-                        self.logger.warning(
-                            f"OKX order book ask depth is {asks_depth}, expected 400"
-                        )
+                    ## Validate order book depth
+                    # asks_depth = len(self.book.get("asks", {}))
+                    # bids_depth = len(self.book.get("bids", {}))
+                    #
+                    # if asks_depth != 400:
+                    #    self.logger.warning(
+                    #        f"OKX order book ask depth is {asks_depth}, expected 400"
+                    #    )
                     # if bids_depth != 400:
                     #     self.logger.warning(
                     #         f"OKX order book bid depth is {bids_depth}, expected 400"
