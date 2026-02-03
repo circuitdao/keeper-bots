@@ -833,7 +833,7 @@ async def run_liquidation_bid_bot():
                 else:
                     log.info("Deposited %s XCH", deposit_amount)
                     try:
-                        response = await rpc_client.vault_borrow(borrow_amount)
+                        response = await rpc_client.vault_borrow(borrow_amount * 1000)
                     except httpx.HTTPStatusError as err:
                         log.error(
                             "Failed to borrow BYC due to HTTPStatusError: %s", err

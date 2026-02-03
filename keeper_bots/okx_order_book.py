@@ -194,10 +194,10 @@ class OkxOrderBook:
                         self.logger.warning(
                             f"OKX order book ask depth is {asks_depth}, expected 400"
                         )
-                    if bids_depth != 400:
-                        self.logger.warning(
-                            f"OKX order book bid depth is {bids_depth}, expected 400"
-                        )
+                    # if bids_depth != 400:
+                    #     self.logger.warning(
+                    #         f"OKX order book bid depth is {bids_depth}, expected 400"
+                    #     )
 
             else:
                 raise Exception(
