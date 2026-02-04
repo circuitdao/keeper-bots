@@ -728,17 +728,22 @@ async def run_liquidation_bid_bot():
             balances = await rpc_client.wallet_balances()
         except httpx.HTTPStatusError as err:
             log.error("Failed to get wallet balances due to HTTPStatusError: %s", err)
+            available_xch_amount = None
             available_byc_amount = None
         except httpx.ReadTimeout as err:
             log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
+            available_xch_amount = None
             available_byc_amount = None
         except ValueError as err:
             log.error("Failed to get wallet balances due to ValueError: %s", err)
+            available_xch_amount = None
             available_byc_amount = None
         except Exception as err:
             log.error("Failed to get wallet balances: %s", err)
+            available_xch_amount = None
             available_byc_amount = None
         else:
+            available_xch_amount = balances["xch"]
             available_byc_amount = balances["byc"]
 
         if not vaults_in_liquidation:
@@ -746,11 +751,14 @@ async def run_liquidation_bid_bot():
             # Print account balances
 
             log.info(
-                "Wallet balance: %s. OKX balance: %s. Sleeping for %s seconds",
-                f"{available_byc_amount / MCAT} BYC"
+                "Wallet balances: %s, %s. OKX balance: %s. Sleeping for %s seconds",
+                f"{available_xch_amount / MOJOS_PER_XCH:.12f} XCH"
+                if available_xch_amount is not None
+                else None,
+                f"{available_byc_amount / MCAT:.3f} BYC"
                 if available_byc_amount is not None
                 else None,
-                f"{available_xch_balance} {collateral_symbol}"
+                f"{available_xch_balance:.12f} {collateral_symbol}"
                 if available_xch_balance is not None
                 else None,
                 RUN_INTERVAL,
@@ -803,6 +811,7 @@ async def run_liquidation_bid_bot():
         if available_byc_amount < debt:
             # get min debt amount from Statutes
             min_debt = 100 * MCAT  # fall back amount
+            liquidation_ratio_pct = 170  # fall back amount
             try:
                 statutes = await rpc_client.statutes_list()
             except httpx.HTTPStatusError as err:
@@ -815,22 +824,43 @@ async def run_liquidation_bid_bot():
                 log.error("Failed to get Statutes: %s", err)
             else:
                 min_debt = int(statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"])
+                liquidation_ratio_pct = int(
+                    statutes["implemented_statutes"]["VAULT_LIQUIDATION_RATIO_PCT"]
+                )
 
-            borrow_amount = max(
-                min_debt, debt - available_byc_amount
-            )  # in mBYC # TODO: needs to result in at least min debt
-            deposit_amount = int(
-                MOJOS_PER_XCH
-                * (borrow_amount / MCAT)
-                * (LIQUIDATION_COLLATERAL_RATIO_PCT / 100)
-                / price
+            collateralization_ratio = (
+                max(
+                    100 + 3 * (liquidation_ratio_pct - 100),
+                    LIQUIDATION_COLLATERAL_RATIO_PCT,
+                )
+                / 100
+            )
+
+            borrow_amount = max(min_debt, debt - available_byc_amount)  # in mBYC
+            deposit_amount = min(
+                max(
+                    available_xch_amount - MOJOS_PER_XCH
+                ),  # keep 1 XCH for fees. TODO: better heuristic
+                int(
+                    MOJOS_PER_XCH
+                    * (borrow_amount / MCAT)
+                    * collateralization_ratio
+                    / price
+                ),
             )  # in mojos
+            borrow_amount = (
+                MCAT
+                * (deposit_amount / MOJOS_PER_XCH)
+                * price
+                / collateralization_ratio
+            )  # in mBYC
 
             log.info(
-                "Depositing %s XCH to borrow %s BYC to bid on debt. Existing balance: %s BYC",
-                deposit_amount,
-                borrow_amount,
-                available_byc_amount,
+                "Depositing %.12f XCH to borrow %.3f BYC to bid on debt. Existing wallet balances: %.12f XCH, %.3f BYC",
+                deposit_amount / MOJOS_PER_XCH,
+                borrow_amount / MCAT,
+                available_xch_amount / MOJOS_PER_XCH,
+                available_byc_amount / MCAT,
             )
 
             # borrow enough BYC to liquidate all vaults
