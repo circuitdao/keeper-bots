@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 from chia.types.blockchain_format.program import Program
 
-from circuit_cli.client import CircuitRPCClient
+from circuit_cli.client import APIError, CircuitRPCClient
 
 # NOTE: Comment out maxRetries parameter in WsClientFactory.py
 #   in the python-okx package, so that this script will continue to try to
@@ -371,6 +371,14 @@ async def liquidate_vault(
                 "Failed to place liquidation auction bid for vault %s due to ValueError: %s",
                 vault_name,
                 err,
+            )
+            raise
+        except APIError as err:
+            log.error(
+                "Failed to place liquidation auction bid for vault %s due to APIError: %s Spend bundle: %s",
+                vault_name,
+                err,
+                err.spend_bundle,
             )
             raise
         except Exception as err:
