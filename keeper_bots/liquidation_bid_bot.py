@@ -839,7 +839,8 @@ async def run_liquidation_bid_bot():
             borrow_amount = max(min_debt, debt - available_byc_amount)  # in mBYC
             deposit_amount = min(
                 max(
-                    available_xch_amount - MOJOS_PER_XCH
+                    available_xch_amount - MOJOS_PER_XCH,
+                    0,
                 ),  # keep 1 XCH for fees. TODO: better heuristic
                 int(
                     MOJOS_PER_XCH
@@ -855,56 +856,61 @@ async def run_liquidation_bid_bot():
                 / collateralization_ratio
             )  # in mBYC
 
-            log.info(
-                "Depositing %.12f XCH to borrow %.3f BYC to bid on debt. Existing wallet balances: %.12f XCH, %.3f BYC",
-                deposit_amount / MOJOS_PER_XCH,
-                borrow_amount / MCAT,
-                available_xch_amount / MOJOS_PER_XCH,
-                available_byc_amount / MCAT,
-            )
+            if deposit_amount > 0:
+                log.info(
+                    "Depositing %.12f XCH to borrow %.3f BYC to bid on debt. Existing wallet balances: %.12f XCH, %.3f BYC",
+                    deposit_amount / MOJOS_PER_XCH,
+                    borrow_amount / MCAT,
+                    available_xch_amount / MOJOS_PER_XCH,
+                    available_byc_amount / MCAT,
+                )
 
-            # borrow enough BYC to liquidate all vaults
-            # if borrowing fails, too bad, we proceed to liquidate with what BYC we have
-            try:
-                response = await rpc_client.vault_deposit(deposit_amount)
-            except httpx.HTTPStatusError as err:
-                log.error("Failed to deposit to vault due to HTTPStatusError: %s", err)
-            except httpx.ReadTimeout as err:
-                log.error("Failed to deposit to vault due to ReadTimeout: %s", err)
-            except ValueError as err:
-                log.error("Failed to deposit to vault due to ValueError: %s", err)
-            except Exception as err:
-                log.error("Failed to deposit to vault: %s", err)
-            else:
-                if response.get("status") != "success":
+                # borrow enough BYC to liquidate all vaults
+                # if borrowing fails, too bad, we proceed to liquidate with what BYC we have
+                try:
+                    response = await rpc_client.vault_deposit(deposit_amount)
+                except httpx.HTTPStatusError as err:
                     log.error(
-                        "Failed to deposit %.12f XCH: %s",
-                        deposit_amount / MOJOS_PER_XCH,
-                        response,
+                        "Failed to deposit to vault due to HTTPStatusError: %s", err
                     )
+                except httpx.ReadTimeout as err:
+                    log.error("Failed to deposit to vault due to ReadTimeout: %s", err)
+                except ValueError as err:
+                    log.error("Failed to deposit to vault due to ValueError: %s", err)
+                except Exception as err:
+                    log.error("Failed to deposit to vault: %s", err)
                 else:
-                    log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
-                    try:
-                        response = await rpc_client.vault_borrow(borrow_amount)
-                    except httpx.HTTPStatusError as err:
-                        log.error(
-                            "Failed to borrow BYC due to HTTPStatusError: %s", err
-                        )
-                    except httpx.ReadTimeout as err:
-                        log.error("Failed to borrow BYC due to ReadTimeout: %s", err)
-                    except ValueError as err:
-                        log.error("Failed to borrow BYC due to ValueError: %s", err)
-                    except Exception as err:
-                        log.error("Failed to borrow BYC: %s", err)
                     if response.get("status") != "success":
                         log.error(
-                            "Failed to borrow %.3f BYC: %s",
-                            borrow_amount / MCAT,
+                            "Failed to deposit %.12f XCH: %s",
+                            deposit_amount / MOJOS_PER_XCH,
                             response,
                         )
                     else:
-                        log.info("Borrowed %.3f BYC", borrow_amount / MCAT)
-                        available_byc_amount += borrow_amount
+                        log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
+                        try:
+                            response = await rpc_client.vault_borrow(borrow_amount)
+                        except httpx.HTTPStatusError as err:
+                            log.error(
+                                "Failed to borrow BYC due to HTTPStatusError: %s", err
+                            )
+                        except httpx.ReadTimeout as err:
+                            log.error(
+                                "Failed to borrow BYC due to ReadTimeout: %s", err
+                            )
+                        except ValueError as err:
+                            log.error("Failed to borrow BYC due to ValueError: %s", err)
+                        except Exception as err:
+                            log.error("Failed to borrow BYC: %s", err)
+                        if response.get("status") != "success":
+                            log.error(
+                                "Failed to borrow %.3f BYC: %s",
+                                borrow_amount / MCAT,
+                                response,
+                            )
+                        else:
+                            log.info("Borrowed %.3f BYC", borrow_amount / MCAT)
+                            available_byc_amount += borrow_amount
 
         liquidation_tasks = []
         for vault in vaults_in_liquidation:
