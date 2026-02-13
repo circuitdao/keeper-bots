@@ -11,11 +11,9 @@ import yaml
 import logging.config
 from dotenv import load_dotenv
 
-from chia_rs import SpendBundle
+from circuit_cli.client import APIError, CircuitRPCClient
 
-
-from circuit_cli.client import CircuitRPCClient
-
+from keeper_bots import MCAT
 
 if os.path.exists("log_conf.yaml"):
     with open("log_conf.yaml", "r") as f:
@@ -57,28 +55,12 @@ rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
 
 async def run_stability_fee_transfer_bot():
-    # try:
-    #    load_dotenv(override=True)
-    # except Exception as err:
-    #    log.error("Failed to load .env: %s", str(err))
-    #
-    # rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server
-    # private_key = str(os.getenv("PRIVATE_KEY")) # Private master key that controls announcer
-    # add_sig_data = str(os.getenv("ADD_SIG_DATA")) # Additional signature data (depends on network)
-    # fee_per_cost = os.getenv("FEE_PER_COST") # Fee per cost for transactions
-    # RUN_INTERVAL = int(os.getenv("SF_TRANSFER_RUN_INTERVAL")) # Frequency (in seconds) with which to run bot
-    # CONTINUE_DELAY = int(os.getenv("SF_TRANSFER_CONTINUE_DELAY")) # Wait (in seconds) before bot runs again after a failed run
-    # if not rpc_url:
-    #    raise ValueError("No URL found at which Circuit RPC server can be reached")
-    # if not private_key:
-    #    raise ValueError("No master private key found")
-
     rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
     while True:
         # get vaults
         try:
-            vaults = await rpc_client.upkeep_vaults_list(
+            vaults_sf_transferable = await rpc_client.upkeep_vaults_list(
                 transferable_stability_fees=True
             )
         except httpx.ReadTimeout as err:
@@ -93,7 +75,7 @@ async def run_stability_fee_transfer_bot():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        if not vaults:
+        if not vaults_sf_transferable:
             log.info(
                 "No vaults with transferable Stability Fees found. Sleeping for %s seconds",
                 RUN_INTERVAL,
@@ -101,15 +83,22 @@ async def run_stability_fee_transfer_bot():
             await asyncio.sleep(RUN_INTERVAL)
             continue
 
-        log.info(f"Found {len(vaults)} vaults with transferable Stability Fees")
+        vaults = [
+            v
+            for v in vaults_sf_transferable
+            if v["stability_fees_to_transfer"] >= MIN_AMOUNT
+        ]
+
+        transferable_amount = sum([v["stability_fees_to_transfer"] for v in vaults])
+
+        log.info(
+            f"Vaults with transferable SFs: {len(vaults)}/{len(vaults_sf_transferable)} "
+            f"above min transfer amount of {MIN_AMOUNT / MCAT:.3f} BYC for a total of {transferable_amount / MCAT:.3f} BYC"
+        )
 
         failed_transfers = 0
         for vault in vaults:
             vault_name = vault["name"]
-
-            if vault["stability_fees_to_transfer"] < MIN_AMOUNT:
-                log.info("SFs to transfer below min amount for vault %s", vault_name)
-                continue
 
             await rpc_client.set_fee_per_cost()
 
@@ -132,24 +121,41 @@ async def run_stability_fee_transfer_bot():
                 )
                 failed_transfers += 1
                 continue
+            except APIError as err:
+                log.exception(
+                    "Failed to transfer Stability Fees from vault %s due to APIError: %s Spend bundle: %s. Sleeping for %s seconds",
+                    vault_name,
+                    err,
+                    err.spend_bundle,
+                    CONTINUE_DELAY,
+                )
+                failed_transfers += 1
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
             except Exception as err:
                 log.exception(
-                    "Failed to transfer Stability Fees from vault %s:", vault_name
+                    "Failed to transfer Stability Fees from vault %s:",
+                    vault_name,
+                    str(err),
                 )
                 failed_transfers += 1
                 continue
 
-            log.info("Transferred Stability Fees from vault %s", vault_name)
+            log.info(
+                "Transferred %.3f BYC in Stability Fees from vault %s to Treasury",
+                vault["stability_fees_to_transfer"] / MCAT,
+                vault_name,
+            )
 
         if failed_transfers > 0:
             log.info(
-                f"Failed to transfer SFs from {failed_transfers} of {len(vaults)} vaults. Sleeping for {CONTINUE_DELAY} seconds"
+                f"Failed to transfer SFs from {failed_transfers}/{len(vaults)} vaults. Sleeping for {CONTINUE_DELAY} seconds"
             )
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         log.info(
-            f"Successfully transferred SFs from all {len(vaults)} vaults that had transferable SFs. Sleeping for {RUN_INTERVAL} seconds"
+            f"Successfully transferred SFs from all {len(vaults)} vaults that had transferable SFs above min transfer amount. Sleeping for {RUN_INTERVAL} seconds"
         )
         await asyncio.sleep(RUN_INTERVAL)
 
