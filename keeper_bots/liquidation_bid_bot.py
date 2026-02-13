@@ -7,7 +7,6 @@
 
 import os
 import asyncio
-import httpx
 import argparse
 import logging
 import yaml
@@ -116,34 +115,26 @@ async def liquidate_vault(
     market_symbol,
     price_symbol,
 ) -> BidFail:
-    log.info("Liquidating vault %s", vault_name)
+    vname = vault_name[-6:]  # shorthand vault name
+    log.info("[%s] Liquidating vault %s", vname, vault_name)
     # get vault collateral, debt and max byc amount to bid
+    log.info("[%s] Getting bid info", vname)
     try:
-        log.info("Getting bid info for vault %s", vault_name)
         bid_info = await rpc_client.upkeep_vaults_bid(vault_name, info=True)
-    except httpx.HTTPStatusError as err:
+    except APIError as err:
         log.error(
-            "Failed to get liquidation auction bid info due to HTTPStatusError: %s", err
+            "[%s] Failed to get bid info. %s: %s. Spend bundle: %s",
+            vname,
+            type(err).__name__,
+            err,
+            err.spend_bundle,
         )
-        raise
-    except httpx.ReadTimeout as err:
-        log.error(
-            "Failed to get liquidation auction bid info due to ReadTimeout: %s", err
-        )
-        raise
-    except ValueError as err:
-        log.error(
-            "Failed to get liquidation auction bid info due to ValueError: %s", err
-        )
-        raise
     except Exception as err:
-        log.error("Failed to get liquidation auction bid info: %s", err)
-        raise
+        log.error("[%s] Failed to get bid info. %s: %s", vname, type(err).__name__, err)
 
     if not bid_info["action_executable"]:
-        log.info(
-            "Cannot place bid in liquidation auction for vault %s", vault_name
-        )  # LATER: provide additional info on why not
+        # LATER: provide additional info on why not
+        log.info("Not possible to place bid for vault %s", vault_name)
         return BidFail.NOT_POSSIBLE
 
     auction_price = bid_info["auction_price"]
@@ -155,159 +146,131 @@ async def liquidate_vault(
     if debt > max_byc_amount_to_bid and not leftover_collateral == 0:
         # this should never happen! bid should use up all collateral if max amount to bid is less than debt
         log.warning(
-            "There is leftover collateral (%s) despite max amount to bid being less than debt (%s < %s)",
-            leftover_collateral,
-            max_byc_amount_to_bid,
-            debt,
+            "[%s] There is leftover collateral (%.12f %s) despite max amount to bid being less than debt (%.3f %s < %.3f %s). Something is wrong!",
+            vname,
+            leftover_collateral / MOJOS_PER_XCH,
+            collateral_symbol,
+            max_byc_amount_to_bid / MCAT,
+            stablecoin_symbol,
+            debt / MCAT,
+            stablecoin_symbol,
         )
 
     log.info(
-        "Vault %s has collateral=%s %s  debt=%s m%s  max amount to bid=%s m%s",
-        vault_name,
+        "[%s] collateral=%.12f %s  debt=%.3f %s  max_amount_to_bid=%.3f %s",
+        vname,
         collateral / MOJOS_PER_XCH,
         collateral_symbol,
-        debt,
+        debt / MCAT,
         stablecoin_symbol,
-        max_byc_amount_to_bid,
+        max_byc_amount_to_bid / MCAT,
         stablecoin_symbol,
     )
 
     # get wallet byc balance
     try:
         balances = await rpc_client.wallet_balances()
-    except httpx.HTTPStatusError as err:
-        log.error("Failed to get wallet balances due to HTTPStatusError: %s", err)
-        raise
-    except httpx.ReadTimeout as err:
-        log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
-        raise
-    except ValueError as err:
-        log.error("Failed to get wallet balances due to ValueError: %s", err)
-        raise
     except Exception as err:
-        log.error("Failed to get wallet balances: %s", err)
+        log.error(
+            "[%s] Failed to get wallet balances. %s: %s", vname, type(err).__name__, err
+        )
         raise
 
     available_byc_amount = balances["byc"]
 
-    # get OKX xch balance
+    log.info(
+        "[%s] collateral=%.12f %s  debt=%.3f %s  max_amount_to_bid=%.3f %s  in_wallet=%.3f %s  ",
+        vault_name,
+        collateral / MOJOS_PER_XCH,
+        collateral_symbol,
+        debt / MCAT,
+        stablecoin_symbol,
+        max_byc_amount_to_bid / MCAT,
+        stablecoin_symbol,
+        available_byc_amount / MCAT,
+        stablecoin_symbol,
+    )
+
+    # get OKX XCH balance
     try:
         response = await accountAPI.get_account_balance(
             ccy=collateral_symbol,
         )
     except Exception as err:
         # keep trying in case of error as we need to close our position
-        log.error("Failed to get OKX account balance")
+        log.error(
+            "[%s] Failed to get OKX account balance. %s: %s",
+            vname,
+            type(err).__name__,
+            err,
+        )
         raise
 
     if response["code"] != "0":
-        # Failed to receive OKX account balance
         raise ValueError(
-            "Failed to get OKX account balance. Response: %s", json.dumps(response)
-        )
-    if not len(response["data"]) == 1:
-        raise ValueError(
-            "Unexpected length of response['data'] list. Expected 1, got %s. Response: %s",
-            len(response["data"]),
-            json.dumps(response),
-        )
-    if not len(response["data"][0]["details"]) == 1:
-        raise ValueError(
-            "Unexpected length of response['data'][0]['details'] list. Expected 1, got %s. Response: %s",
-            len(response["data"][0]["details"]),
-            json.dumps(response),
+            f"[{vname}] Failed to get OKX account balance: {json.dumps(response)}"
         )
 
-    available_xch_balance = float(
-        response["data"][0]["details"][0]["cashBal"]
-    )  # in XCH
-
-    log.info("Got OKX account balance: %s %s", available_xch_balance, collateral_symbol)
+    try:
+        available_xch_balance = float(
+            response["data"][0]["details"][0]["cashBal"]
+        )  # in XCH
+    except Exception:
+        raise ValueError(
+            f"[{vname}] Unexpected response format getting OKX account balance: {json.dumps(response)}"
+        )
 
     log.info(
-        "Vault %s has: collateral=%s %s  debt=%s %s  available amount=%s %s  max bid amount=%s %s",
-        vault_name,
-        collateral / MOJOS_PER_XCH,
+        "[%s] Got OKX account balance: %.12f %s",
+        vname,
+        available_xch_balance,
         collateral_symbol,
-        debt / MCAT,
-        stablecoin_symbol,
-        available_byc_amount / MCAT,
-        stablecoin_symbol,
-        max_byc_amount_to_bid / MCAT,
-        stablecoin_symbol,
     )
 
-    bid_amount = min(
-        available_byc_amount,  # don't bid more than available in wallet
-        max_byc_amount_to_bid,  # don't bid more than necessary according to vault state (amount of debt & collateral)
-        int(
-            available_xch_balance * auction_price * 1000 / PRICE_PRECISION
-        ),  # don't bid more than can be hedged
-    )
+    bid_amount = int(
+        min(
+            available_byc_amount,  # don't bid more than available in wallet
+            max_byc_amount_to_bid,  # don't bid more than necessary given vault state (amount of debt & collateral)
+            (available_xch_balance * auction_price * MCAT)
+            // PRICE_PRECISION,  # don't bid more than can be hedged
+        )
+    )  # convert to int as // operator may return a float
     if MAX_BID_AMOUNT is not None:
         bid_amount = min(bid_amount, MAX_BID_AMOUNT)
 
+    log.info(
+        "[%s] Getting info for %.3f %s bid", vname, bid_amount / MCAT, stablecoin_symbol
+    )
     try:
-        log.info(
-            "Getting bid info for vault %s with bid amount %s", vault_name, bid_amount
-        )
         bid_info = await rpc_client.upkeep_vaults_bid(
             vault_name, amount=bid_amount, info=True
         )
-    except httpx.HTTPStatusError as err:
-        log.error(
-            "Failed to get liquidation auction bid info for bid amount %s due to HTTPStatusError: %s",
-            bid_amount,
-            err,
-        )
-        raise
-    except httpx.ReadTimeout as err:
-        log.error(
-            "Failed to get liquidation auction bid info for bid amount %s due to ReadTimeout: %s",
-            bid_amount,
-            err,
-        )
-        raise
-    except ValueError as err:
-        log.error(
-            "Failed to get liquidation auction bid info for bid amount %s due to ValueError: %s",
-            bid_amount,
-            err,
-        )
-        raise
     except Exception as err:
-        log.error(
-            "Failed to liquidation auction bid info for bid amount %s: %s",
-            bid_amount,
-            err,
-        )
+        log.error("[%s] Failed to get bid info. %s: %s", vname, type(err).__name__, err)
         raise
 
     if not bid_info["action_executable"]:
-        min_byc_amount_to_bid = bid_info["min_byc_amount_to_bid"]
-        if available_byc_amount < min_byc_amount_to_bid:
-            log.info(
-                "Cannot place bid of amount %s m%s in liquidation auction for vault %s: Amount available in wallet is less than min amount to bid (%s < %s)",
-                bid_amount,
-                stablecoin_symbol,
-                vault_name,
-                available_byc_amount,
-                min_byc_amount_to_bid,
-            )
-        else:
-            log.info(
-                "Cannot place bid of amount %s m%s in liquidation auction for vault %s",
-                bid_amount,
-                stablecoin_symbol,
-                vault_name,
-            )
+        log.info("[%s] Cannot place bid. Action not executable", vname)
+        return BidFail.NOT_POSSIBLE
+
+    min_byc_amount_to_bid = bid_info["min_byc_amount_to_bid"]
+    if available_byc_amount < min_byc_amount_to_bid:
+        log.info(
+            "[%s] Cannot place bid. Wallet holds less than min amount to bid (%.3f %s < %.3f %s)",
+            vname,
+            available_byc_amount / MCAT,
+            stablecoin_symbol,
+            min_byc_amount_to_bid / MCAT,
+            stablecoin_symbol,
+        )
         return BidFail.NOT_POSSIBLE
 
     collateral_to_receive = bid_info["collateral_to_receive"] / MOJOS_PER_XCH
     leftover_collateral = bid_info["leftover_collateral"] / MOJOS_PER_XCH
 
     log.info(
-        "Can buy %.12f %s at %.2f %s for %.3f %s in liquidation auction, leaving %.12f of %.12f %s in collateral",
+        "[%s] Can buy %.12f %s at %.2f %s for %.3f %s, leaving %.12f of %.12f %s in collateral",
+        vname,
         collateral_to_receive,
         collateral_symbol,
         auction_price / PRICE_PRECISION,
@@ -328,254 +291,266 @@ async def liquidate_vault(
     )
 
     if hedge_price is None or hedge_volume is None:
-        log.error(
-            "Order book returned None. Insufficient liquidity for vault %s", vault_name
-        )
+        log.error("[%s] Insufficient liquidity in OKX order book", vname)
         return BidFail.NOT_POSSIBLE
 
     hedge_amount = hedge_price * hedge_volume
     log.info(
-        f"Can sell {collateral_to_receive:.12f} {collateral_symbol} at {hedge_price} {price_symbol} for {hedge_amount} {proxy_symbol} (hedge amount) on OKX"
+        "[%s] Can sell %.12f %s at %.4f %s for %.2f %s (hedge amount) on OKX",
+        vname,
+        collateral_to_receive,
+        collateral_symbol,
+        hedge_price,
+        price_symbol,
+        hedge_amount,
+        proxy_symbol,
     )
     realizable_margin = hedge_amount / (bid_amount / MCAT) - 1
     if realizable_margin < MARGIN:
         log.info(
-            f"Hedge amount over bid amount ratio too small: {(1 + realizable_margin) * 100:.1f}% < {(1 + MARGIN) * 100:.1f}% "
-            f"({hedge_amount} {proxy_symbol} <= {bid_amount * (1 + MARGIN) / MCAT} {stablecoin_symbol}). Risk too high. Not placing a bid"
+            f"[{vname}] Margin too small: {realizable_margin * 100:.1f}% < {MARGIN * 100:.1f}% "
+            f"({hedge_amount:.4f} {proxy_symbol} < {(1 + MARGIN) * 100:.1f}% * {bid_amount / MCAT:.4f} {stablecoin_symbol}). "
+            f"Risk too high. Not placing a bid"
         )
         return BidFail.NOT_PROFITABLE
-    else:
-        log.info(
-            f"Hedge amount over bid amount ratio sufficiently large: {(1 + realizable_margin) * 100:.1f}% >= {(1 + MARGIN) * 100:.1f}% "
-            f"({hedge_amount} {proxy_symbol} > {bid_amount * (1 + MARGIN) / MCAT} {stablecoin_symbol}. Placing bid of {bid_amount / MCAT:.3f} {stablecoin_symbol}"
+
+    log.info(
+        f"[{vname}] Margin sufficiently large: {realizable_margin * 100:.1f}% >= {MARGIN * 100:.1f}% "
+        f"({hedge_amount:.4f} {proxy_symbol} > {(1 + MARGIN) * 100:.1f}% * {bid_amount / MCAT:.4f} {stablecoin_symbol}. "
+    )
+    # bid for collateral
+    try:
+        response = await rpc_client.upkeep_vaults_bid(vault_name, bid_amount)
+    except Exception as err:
+        log.error("[%s] Failed to place bid. %s: %s", vname, type(err).__name__, err)
+        raise
+
+    if response.get("status") != "success":
+        log.error("[%s] Failed to place bid. Response: %s", vname, json.dumps(response))
+        raise ValueError(
+            f"[{vname}] Failed to place bid. Response status: {response.get('status')}"
         )
-        # bid for collateral
+
+    log.info(
+        "[%s] Bid successful. Paid: %.3f %s. Received: %.12f %s",
+        vname,
+        bid_amount / MCAT,
+        stablecoin_symbol,
+        collateral_to_receive,
+        collateral_symbol,
+    )
+
+    # hedge on OKX
+    ordId = None
+    retry_delay = 2
+    max_retries = 30
+    cnt = 0
+    while cnt < max_retries:
+        cnt += 1
+        log.info(
+            "[%s] Attempt no. %s/%s to place market sell order for %.12f %s on OKX",
+            vname,
+            cnt,
+            max_retries,
+            hedge_volume,
+            collateral_symbol,
+        )
         try:
-            response = await rpc_client.upkeep_vaults_bid(vault_name, bid_amount)
-        except httpx.HTTPStatusError as err:
-            log.error(
-                "Failed to place liquidation auction bid for vault %s due to HTTPStatusError: %s",
-                vault_name,
-                err,
+            response = await tradeAPI.place_order(
+                instId=market_symbol,
+                tdMode="cash",
+                side="sell",
+                ordType="market",
+                tgtCcy="base_ccy",  # currency in which size is measured
+                sz="{:.{}f}".format(hedge_volume, base_decimals),
             )
-            raise
-        except httpx.ReadTimeout as err:
-            log.error(
-                "Failed to place liquidation auction bid for vault %s due to ReadTimeout: %s",
-                vault_name,
-                err,
-            )
-            raise
-        except ValueError as err:
-            log.error(
-                "Failed to place liquidation auction bid for vault %s due to ValueError: %s",
-                vault_name,
-                err,
-            )
-            raise
-        except APIError as err:
-            log.error(
-                "Failed to place liquidation auction bid for vault %s due to APIError: %s Spend bundle: %s",
-                vault_name,
-                err,
-                err.spend_bundle,
-            )
-            raise
         except Exception as err:
+            # keep trying in case of error as we need to close our position
             log.error(
-                "Failed to place liquidation auction bid for vault %s: %s",
-                vault_name,
+                "[%s] Failed to place order. %s: %s. Retrying in %s seconds",
+                vname,
+                type(err).__name__,
                 err,
+                retry_delay,
             )
-            raise
+            await asyncio.sleep(retry_delay)
+            continue
 
-        if not response["status"] == "success":
-            raise ValueError(
-                "Failed to place liquidation auction bid for vault %. Response code: %s",
-                vault_name,
-                response["success"],
-            )
-
-        # hedge on OKX
-        ordId = None
-        retry_delay = 2
-        max_retries = 30
-        cnt = 0
-        while cnt < max_retries:
-            cnt += 1
-            log.info(
-                "Attempt no. %s/%s to place market sell order for %s %s on OKX",
-                cnt,
-                max_retries,
-                hedge_volume,
-                collateral_symbol,
-            )
-            try:
-                response = await tradeAPI.place_order(
-                    instId=market_symbol,
-                    tdMode="cash",
-                    side="sell",
-                    ordType="market",
-                    tgtCcy="base_ccy",  # currency in which size is measured
-                    sz="{:.{}f}".format(hedge_volume, base_decimals),
-                )
-            except Exception as err:
-                # keep trying in case of error as we need to close our position
-                log.error(
-                    "Failed to place market sell order on OKX: %s. Retrying in %s seconds",
-                    str(err),
-                    retry_delay,
-                )
-                await asyncio.sleep(retry_delay)
-                continue
-
-            if response["code"] != "0":
-                error_code = response.get("sCode", "")
-                error_msg = response.get("sMsg", "")
+        if response.get("code") != "0":
+            data = response.get("data", None)
+            if data and isinstance(data, list):
+                error_code = data[0].get("sCode", "")
+                error_msg = data[0].get("sMsg", "")
                 if error_code in ["51005", "51020"]:
                     # See https://www.okx.com/docs-v5/en/#error-code-rest-api-public
                     # irrecoverable error. no point in retrying
-                    raise OrderRejectedError(f"OKX error {error_code}: {error_msg}")
-                # OKX failed to place order for unkown reason. retry
-                log.error(
-                    "Failed to place market sell order on OKX. Response: %s. Retrying in %s seconds",
-                    json.dumps(response),
-                    retry_delay,
-                )
-                await asyncio.sleep(retry_delay)
-                continue
-
-            if not len(response["data"]) == 1:
-                log.warning(
-                    "Unexpected length of response['data'] list. Expected 1, got %s. Response: %s",
-                    len(response["data"]),
-                    json.dumps(response),
-                )
-
-            ordId = response["data"][0]["ordId"]
-            log.info(
-                "Successfully placed market sell order on OKX. OrdId: %s", ordId
-            )  # Response: %s", json.dumps(response))
-            break
-
-        if ordId is None:
+                    raise OrderRejectedError(
+                        f"[{vname}] Failed to place order. Error {error_code}: {error_msg}"
+                    )
+            # OKX failed to place order for unkown reason. retry
             log.error(
-                "Failed to place market sell order on OKX after %s attempts. Hedge volume: %s %s",
-                max_retries,
-                hedge_volume,
-                collateral_symbol,
+                "[%s] Failed to place order. Response: %s. Retrying in %s seconds",
+                vname,
+                json.dumps(response),
+                retry_delay,
             )
-            raise Exception("Failed to hedge position. Could not place order")
+            await asyncio.sleep(retry_delay)
+            continue
 
-        # check that we sold expected amount and calculate PnL
-        retry_delay = 2
-        max_retries = 5
-        cnt = 0
-        while cnt < max_retries:
-            cnt += 1
-            log.info(
-                "Attempt no. %s/%s to get order info for ordID %s",
-                cnt,
-                max_retries,
+        try:
+            ordId = response["data"][0]["ordId"]
+        except Exception:
+            log.error(
+                "[%s] Failed to get ordId. Unrecognized response format: %s",
+                vname,
+                json.dumps(response),
+            )
+            raise
+
+        break
+
+    if ordId is None:
+        log.error(
+            "[%s] Failed to place order after %s attempts. Aborting",
+            vname,
+            max_retries,
+            hedge_volume,
+            collateral_symbol,
+        )
+        raise Exception(f"[{vname}] Failed to place order (ordID is None)")
+
+    log.info("[%s] Successfully placed order. OrdId: %s", vname, ordId)
+
+    # check that we sold expected amount and calculate PnL
+    retry_delay = 2
+    max_retries = 5
+    cnt = 0
+    while cnt < max_retries:
+        cnt += 1
+        log.info(
+            "[%s] Attempt no. %s/%s to get order info for ordID %s",
+            vname,
+            cnt,
+            max_retries,
+            ordId,
+        )
+        try:
+            response = await tradeAPI.get_order(instId=market_symbol, ordId=ordId)
+        except Exception as err:
+            # keep trying in case of error as we need to close our position
+            log.error(
+                "[%s] Failed to get info for ordId %s. %s: %s",
+                vname,
                 ordId,
+                type(err).__name__,
+                err,
             )
-            try:
-                response = await tradeAPI.get_order(instId=market_symbol, ordId=ordId)
-            except Exception as err:
-                # keep trying in case of error as we need to close our position
-                log.error("Failed to get OKX order ordId %s", ordId)
-                await asyncio.sleep(retry_delay)
-                continue
+            await asyncio.sleep(retry_delay)
+            continue
 
-            if response["code"] != "0":
-                # failed to get order
-                log.error(
-                    "Failed to get OKX order ordId %s. Response: %s",
-                    ordId,
-                    json.dumps(response),
-                )
-                await asyncio.sleep(retry_delay)
-                continue
+        if response["code"] != "0":
+            # failed to get order
+            log.error(
+                "[%s] Failed to get info for ordId %s. Response: %s",
+                vname,
+                ordId,
+                json.dumps(response),
+            )
+            await asyncio.sleep(retry_delay)
+            continue
 
-            if not len(response["data"]) == 1:
-                log.warning(
-                    "Unexpected length of response['data'] list. Expected 1, got %s. Response: %s",
-                    len(response["data"]),
-                    json.dumps(response),
-                )
+        if not len(response["data"]) == 1:
+            log.warning(
+                "Unexpected length of response['data'] list. Expected 1, got %s. Response: %s",
+                len(response["data"]),
+                json.dumps(response),
+            )
 
+        try:
             state = response["data"][0]["state"]
             total_fill_volume = float(
                 response["data"][0]["accFillSz"]
             )  # given in base currency
             last_fill_price = float(response["data"][0]["fillPx"])
-            avg_fill_price = (
-                float(response["data"][0]["avgPx"])
-                if response["data"][0]["avgPx"] != ""
-                else None
-            )
+            avg_fill_price = float(response["data"][0]["avgPx"])
             okx_fee = float(
                 response["data"][0]["fee"]
             )  # accumulated fee and rebate in quote currency
             fee_ccy = response["data"][0]["feeCcy"]
-            if not state == "filled":
-                log.warning("Market sell order was not filled. State: %s", state)
-            if not fee_ccy == proxy_symbol:
-                log.warning(
-                    "Market sell order fees were charged in %s, expected %s",
-                    fee_ccy,
-                    proxy_symbol,
-                )
-            if not abs(total_fill_volume - hedge_volume) < 10 ** (-base_decimals):
-                log.warning(
-                    "Filled volume does not equal hedge volume (%s != %s)",
-                    total_fill_volume,
-                    hedge_volume,
-                )
+        except Exception:
+            log.error(
+                "[%s] Failed to get order info. Unrecognized response format: %s",
+                vname,
+                json.dumps(response),
+            )
+            return BidFail.NOT_RECONCILED
 
+        if not state == "filled":
+            log.warning("[%s] Order was not filled. State: %s", vname, state)
+        else:
             log.info(
-                "Market sell order was filled. Volume: %s %s. Avg price: %s %s. Lowest price: %s %s",
+                "[%s] Order was filled. Volume: %s %s. Avg price: %s %s. Lowest price: %s %s. Fee: %s %s",
+                vname,
                 total_fill_volume,
                 collateral_symbol,
                 avg_fill_price,
                 price_symbol,
                 last_fill_price,
                 price_symbol,
+                okx_fee,
+                fee_ccy,
+            )
+        if not fee_ccy == proxy_symbol:
+            log.warning(
+                "[%s] Trading fees were charged in %s, expected %s",
+                vname,
+                fee_ccy,
+                proxy_symbol,
+            )
+        if not abs(total_fill_volume - hedge_volume) < 10 ** (-base_decimals):
+            log.warning(
+                "[%s] Filled volume does not match hedge volume (%s != %s)",
+                vname,
+                total_fill_volume,
+                hedge_volume,
             )
 
-            quote_delta = bid_amount / MCAT - total_fill_volume * avg_fill_price
-            base_delta = (
-                collateral_to_receive - total_fill_volume + okx_fee
-            )  # LATER: add on-chain tx fee
-            price = okx_order_book.mid_price()
-            if price is None:
-                log.error(
-                    "Order book mid price unavailable. Cannot calculate PnL. Sleeping for %s seconds",
-                    CONTINUE_DELAY,
-                )
-                return BidFail.NOT_RECONCILED
-
-            pnl = quote_delta + base_delta * price
-
-            log.info(
-                "PnL: %.2f USD. Remaining %s position: %.3f. Remaining stablecoin position: %.3f",
-                pnl,
-                collateral_symbol,
-                base_delta,
-                quote_delta,
+        quote_delta = (
+            total_fill_volume * avg_fill_price - okx_fee - bid_amount / MCAT
+        )  # LATER: add melt mojos (if any)
+        base_delta = (
+            collateral_to_receive - total_fill_volume
+        )  # LATER: deduct on-chain tx fee
+        price = okx_order_book.mid_price()
+        if price is None:
+            log.error(
+                "[%s] Order book mid price unavailable. Cannot calculate PnL", vname
             )
-            break
-
-        if response["code"] != "0":
             return BidFail.NOT_RECONCILED
 
-        return BidFail.NONE
-        # reconcile balances
-        # LATER: OKX may adjust size of market order if user doesn't have enough funds.
-        #   See banAmend parameter: https://my.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order
+        pnl = quote_delta + base_delta * price
 
-        # recycle capital
-        # LATER: USDT -> USDC --transfer to Base-> USDC.b --warp.green-> wUSDC.b -> BYC
+        log.info(
+            "[%s] PnL: %.2f USD. Change in %s position: %.3f. Chance in stablecoin position: %.3f",
+            vname,
+            pnl,
+            collateral_symbol,
+            base_delta,
+            quote_delta,
+        )
+        return BidFail.NONE
+
+    log.warning(
+        "[%s] Failed to calculate PnL. All %s attempts unsuccessful", vname, max_retries
+    )
+    return BidFail.NOT_RECONCILED
+
+    # reconcile balances
+    # LATER: OKX may adjust size of market order if user doesn't have enough funds.
+    #   See banAmend parameter: https://my.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order
+
+    # recycle capital
+    # LATER: USDT -> USDC --transfer to Base-> USDC.b --warp.green-> wUSDC.b -> BYC
 
 
 async def run_liquidation_bid_bot():
@@ -676,115 +651,44 @@ async def run_liquidation_bid_bot():
 
         try:
             state = await rpc_client.upkeep_state(vaults=True)
-        except httpx.HTTPStatusError as err:
-            log.error("Failed to get state of vaults due to HTTPStatusError: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        except httpx.ReadTimeout as err:
-            log.error("Failed to get state of vaults due to ReadTimeout: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
-        except ValueError as err:
-            log.error("Failed to get state of vaults due to ValueError: %s", err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
         except Exception as err:
-            log.error("Failed to get state of vaults: %s", err)
+            log.error("Failed to get state of vaults. %s: %s", type(err).__name__, err)
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
         vaults_in_liquidation = state.get("vaults_in_liquidation", [])
 
-        # get OKX xch balance. max amount we can bid depends on much much XCH we have to hedge
-        try:
-            response = await accountAPI.get_account_balance(
-                ccy=collateral_symbol,
-            )
-        except Exception:
-            # keep trying in case of error as we need to close our position
-            log.error("Failed to get OKX account balance")
-            available_xch_balance = None
-        else:
-            if not response["code"] == "0":
-                # Failed to receive OKX account balance
-                log.error(
-                    "Failed to get OKX account balance. Response: %s",
-                    json.dumps(response),
-                )
-                available_xch_balance = None
-            elif not len(response["data"]) == 1:
-                log.error(
-                    "Unexpected length of response['data'] list. Expected 1, got %s. Response: %s",
-                    len(response["data"]),
-                    json.dumps(response),
-                )
-                available_xch_balance = None
-            elif not len(response["data"][0]["details"]) == 1:
-                log.error(
-                    "Unexpected length of response['data'][0]['details'] list. Expected 1, got %s. Response: %s",
-                    len(response["data"][0]["details"]),
-                    json.dumps(response),
-                )
-                available_xch_balance = None
-            else:
-                available_xch_balance = float(
-                    response["data"][0]["details"][0]["cashBal"]
-                )  # in XCH
-
-        # get wallet byc balance
-        try:
-            balances = await rpc_client.wallet_balances()
-        except httpx.HTTPStatusError as err:
-            log.error("Failed to get wallet balances due to HTTPStatusError: %s", err)
-            available_xch_amount = None
-            available_byc_amount = None
-        except httpx.ReadTimeout as err:
-            log.error("Failed to get wallet balances due to ReadTimeout: %s", err)
-            available_xch_amount = None
-            available_byc_amount = None
-        except ValueError as err:
-            log.error("Failed to get wallet balances due to ValueError: %s", err)
-            available_xch_amount = None
-            available_byc_amount = None
-        except Exception as err:
-            log.error("Failed to get wallet balances: %s", err)
-            available_xch_amount = None
-            available_byc_amount = None
-        else:
-            available_xch_amount = balances["xch"]
-            available_byc_amount = balances["byc"]
-
         if not vaults_in_liquidation:
-            log.info("No vaults in liquidation")
-            # Print account balances
-
-            log.info(
-                "Wallet balances: %s, %s. OKX balance: %s. Sleeping for %s seconds",
-                f"{available_xch_amount / MOJOS_PER_XCH:.12f} XCH"
-                if available_xch_amount is not None
-                else None,
-                f"{available_byc_amount / MCAT:.3f} BYC"
-                if available_byc_amount is not None
-                else None,
-                f"{available_xch_balance:.12f} {collateral_symbol}"
-                if available_xch_balance is not None
-                else None,
-                RUN_INTERVAL,
-            )
-
+            log.info("No vaults in liquidation. Sleeping for %s seconds", RUN_INTERVAL)
             await asyncio.sleep(RUN_INTERVAL)
             continue
 
-        log.info(
-            "Found %s vaults in liquidation.",
-            len(vaults_in_liquidation),
-        )
+        log.info("Found %s vaults in liquidation", len(vaults_in_liquidation))
 
-        if available_xch_balance is None:
+        # get wallet balances
+        try:
+            balances = await rpc_client.wallet_balances()
+        except Exception as err:
+            log.error("Failed to get wallet balances. %s: %s", type(err).__name__, err)
+
+        available_xch_amount = balances.get("xch", None)
+        available_byc_amount = balances.get("byc", None)
+
+        if available_xch_amount is None:
             log.error(
-                "Failed to get OKX XCH balance. Cannot bid in liquidation auction(s). Sleeping for %s seconds",
+                "Failed to get %s wallet balance (None). Sleeping for %s seconds",
+                collateral_symbol,
                 CONTINUE_DELAY,
             )
+            asyncio.sleep(CONTINUE_DELAY)
+            continue
+
+        if available_byc_amount is None:
+            log.error(
+                "Failed to get BYC wallet balance (None). Sleeping for %s seconds",
+                CONTINUE_DELAY,
+            )
+            asyncio.sleep(CONTINUE_DELAY)
             continue
 
         # Check how much debt there is. Then borrow an appropriate amount of BYC
@@ -798,16 +702,21 @@ async def run_liquidation_bid_bot():
 
         debts = []
         for vault in vaults_in_liquidation:
-            auction_state = Program.fromhex(vault["auction_state"])
-            initiator_incentive_balance = auction_state.at("rrrrrf").as_int()
-            byc_to_treasury_balance = auction_state.at("rrrrrrrf").as_int()
-            byc_to_melt_balance = auction_state.at("rrrrrrrrf").as_int()
+            try:
+                auction_state = Program.fromhex(vault["auction_state"])
+                initiator_incentive_balance = auction_state.at("rrrrrf").as_int()
+                byc_to_treasury_balance = auction_state.at("rrrrrrrf").as_int()
+                byc_to_melt_balance = auction_state.at("rrrrrrrrf").as_int()
+                start_price = auction_state.at("rf").as_int() / PRICE_PRECISION
+            except Exception:
+                raise ValueError(
+                    f"Failed to destructure auction state of vault {vault['name']}"
+                )
             debts.append(
                 initiator_incentive_balance
                 + byc_to_treasury_balance
                 + byc_to_melt_balance
             )
-            start_price = auction_state.at("rf").as_int() / PRICE_PRECISION
             if start_price < price:
                 price = start_price
 
@@ -817,24 +726,30 @@ async def run_liquidation_bid_bot():
         #  then bid with those specific coins.
 
         if available_byc_amount < debt:
+            # TODO: take OKX XCH balance into account when deciding how much byc to borrow ? See liq task
             # get min debt amount from Statutes
             min_debt = 100 * MCAT  # fall back amount
             liquidation_ratio_pct = 170  # fall back amount
             try:
                 statutes = await rpc_client.statutes_list()
-            except httpx.HTTPStatusError as err:
-                log.error("Failed to get Statutes due to HTTPStatusError: %s", err)
-            except httpx.ReadTimeout as err:
-                log.error("Failed to get Statutes due to ReadTimeout: %s", err)
-            except ValueError as err:
-                log.error("Failed to get Statutes due to ValueError: %s", err)
             except Exception as err:
-                log.error("Failed to get Statutes: %s", err)
-            else:
-                min_debt = int(statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"])
-                liquidation_ratio_pct = int(
-                    statutes["implemented_statutes"]["VAULT_LIQUIDATION_RATIO_PCT"]
+                log.error(
+                    "Failed to get Statutes. Continuing with fallback values. %s: %s.",
+                    type(err).__name__,
+                    err,
                 )
+            else:
+                try:
+                    min_debt = int(
+                        statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"]
+                    )
+                    liquidation_ratio_pct = int(
+                        statutes["implemented_statutes"]["VAULT_LIQUIDATION_RATIO_PCT"]
+                    )
+                except Exception:
+                    log.error(
+                        "Failed to get Statutes values. Continuing with fallback values"
+                    )
 
             collateralization_ratio = (
                 max(
@@ -845,19 +760,19 @@ async def run_liquidation_bid_bot():
             )
 
             borrow_amount = max(min_debt, debt - available_byc_amount)  # in mBYC
-            deposit_amount = min(
-                max(
-                    available_xch_amount - MOJOS_PER_XCH,
-                    0,
-                ),  # keep 1 XCH for fees. TODO: better heuristic
-                int(
+            deposit_amount = int(
+                min(
+                    max(
+                        available_xch_amount - MOJOS_PER_XCH,
+                        0,
+                    ),  # keep 1 XCH for fees. TODO: better heuristic
                     MOJOS_PER_XCH
                     * (borrow_amount / MCAT)
                     * collateralization_ratio
-                    / price
-                ),
+                    / price,
+                )
             )  # in mojos
-            borrow_amount = (
+            borrow_amount = int(
                 MCAT
                 * (deposit_amount / MOJOS_PER_XCH)
                 * price
@@ -877,16 +792,10 @@ async def run_liquidation_bid_bot():
                 # if borrowing fails, too bad, we proceed to liquidate with what BYC we have
                 try:
                     response = await rpc_client.vault_deposit(deposit_amount)
-                except httpx.HTTPStatusError as err:
-                    log.error(
-                        "Failed to deposit to vault due to HTTPStatusError: %s", err
-                    )
-                except httpx.ReadTimeout as err:
-                    log.error("Failed to deposit to vault due to ReadTimeout: %s", err)
-                except ValueError as err:
-                    log.error("Failed to deposit to vault due to ValueError: %s", err)
                 except Exception as err:
-                    log.error("Failed to deposit to vault: %s", err)
+                    log.error(
+                        "Failed to deposit to vault. %s: %s", type(err).__name__, err
+                    )
                 else:
                     if response.get("status") != "success":
                         log.error(
@@ -898,23 +807,15 @@ async def run_liquidation_bid_bot():
                         log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
                         try:
                             response = await rpc_client.vault_borrow(borrow_amount)
-                        except httpx.HTTPStatusError as err:
-                            log.error(
-                                "Failed to borrow BYC due to HTTPStatusError: %s", err
-                            )
-                        except httpx.ReadTimeout as err:
-                            log.error(
-                                "Failed to borrow BYC due to ReadTimeout: %s", err
-                            )
-                        except ValueError as err:
-                            log.error("Failed to borrow BYC due to ValueError: %s", err)
                         except Exception as err:
-                            log.error("Failed to borrow BYC: %s", err)
+                            log.error(
+                                "Failed to borrow BYC. %s: %s", type(err).__name__, err
+                            )
                         if response.get("status") != "success":
                             log.error(
                                 "Failed to borrow %.3f BYC: %s",
                                 borrow_amount / MCAT,
-                                response,
+                                json.dumps(response),
                             )
                         else:
                             log.info("Borrowed %.3f BYC", borrow_amount / MCAT)
