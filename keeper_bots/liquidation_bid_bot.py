@@ -9,6 +9,7 @@ import os
 import asyncio
 import argparse
 import logging
+import time
 import yaml
 import json
 from enum import Enum
@@ -32,6 +33,7 @@ from keeper_bots.utils import SPOT
 PRICE_PRECISION = 100
 MOJOS_PER_XCH = 10**12
 MCAT = 1000
+HEARTBEAT_INTERVAL = 86400  # seconds; keep OKX API key active
 
 
 class TradeEnv(Enum):
@@ -646,8 +648,19 @@ async def run_liquidation_bid_bot():
     base_decimals = 4  # LATER: can we get this from OKX API in case it ever changes?
     price_decimals = 4  # LATER: can we get this from OKX API in case it ever changes?
 
+    # Fire immediately on first loop to verify key is valid at startup
+    last_okx_heartbeat = time.monotonic() - HEARTBEAT_INTERVAL
+
     while True:
         await rpc_client.set_fee_per_cost()
+
+        if time.monotonic() - last_okx_heartbeat >= HEARTBEAT_INTERVAL:
+            try:
+                await accountAPI.get_account_balance()
+                log.info("OKX API heartbeat: balance query successful")
+            except Exception as err:
+                log.warning("OKX API heartbeat failed. %s: %s", type(err).__name__, err)
+            last_okx_heartbeat = time.monotonic()
 
         try:
             state = await rpc_client.upkeep_state(vaults=True)
