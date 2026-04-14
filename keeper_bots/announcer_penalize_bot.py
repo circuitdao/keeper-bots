@@ -119,7 +119,10 @@ async def run_announcer_penalize_bot():
 
 
 def main():
-    asyncio.run(run_announcer_penalize_bot())
+    try:
+        asyncio.run(run_announcer_penalize_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down announcer penalize bot")
 
 
 if __name__ == "__main__":

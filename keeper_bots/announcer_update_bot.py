@@ -330,9 +330,10 @@ async def run_announcer():
 
 
 def main():
-    import asyncio
-
-    asyncio.run(run_announcer())
+    try:
+        asyncio.run(run_announcer())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down announcer update bot")
 
 
 if __name__ == "__main__":

@@ -98,9 +98,10 @@ async def run_statutes():
 
 
 def main():
-    import asyncio
-
-    asyncio.run(run_statutes())
+    try:
+        asyncio.run(run_statutes())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down statutes update bot")
 
 
 if __name__ == "__main__":

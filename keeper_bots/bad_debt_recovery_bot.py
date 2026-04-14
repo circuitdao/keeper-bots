@@ -109,13 +109,10 @@ async def run_bad_debt_recovery_bot():
 
 
 def main():
-    loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(run_bad_debt_recovery_bot())
+        asyncio.run(run_bad_debt_recovery_bot())
     except KeyboardInterrupt:
         log.info("Received KeyboardInterrupt. Shutting down bad debt recovery bot")
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
 
 
 if __name__ == "__main__":

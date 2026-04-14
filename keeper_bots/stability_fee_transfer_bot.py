@@ -51,9 +51,6 @@ if not private_key:
     raise ValueError("No master private key found")
 
 
-rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
-
-
 async def run_stability_fee_transfer_bot():
     rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
 
@@ -160,5 +157,12 @@ async def run_stability_fee_transfer_bot():
         await asyncio.sleep(RUN_INTERVAL)
 
 
+def main():
+    try:
+        asyncio.run(run_stability_fee_transfer_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down stability fee transfer bot")
+
+
 if __name__ == "__main__":
-    asyncio.run(run_stability_fee_transfer_bot())
+    main()

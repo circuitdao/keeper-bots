@@ -106,7 +106,13 @@ async def run_governance_veto_bot():
 
                 log.info("Successfully vetoed bill %s", bill["name"])
 
-if __name__ == '__main__':
+def main():
+    try:
+        asyncio.run(run_governance_veto_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down governance veto bot")
 
-    asyncio.run(run_governance_veto_bot())
+
+if __name__ == '__main__':
+    main()
 

@@ -152,7 +152,13 @@ async def run_surplus_start_settle_bot():
         await asyncio.sleep(RUN_INTERVAL)
 
 
-if __name__ == '__main__':
+def main():
+    try:
+        asyncio.run(run_surplus_start_settle_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down surplus start/settle bot")
 
-    asyncio.run(run_surplus_start_settle_bot())
+
+if __name__ == '__main__':
+    main()
 

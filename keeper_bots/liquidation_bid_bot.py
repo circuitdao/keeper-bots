@@ -894,13 +894,10 @@ async def run_liquidation_bid_bot():
 
 
 def main():
-    loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(run_liquidation_bid_bot())
+        asyncio.run(run_liquidation_bid_bot())
     except KeyboardInterrupt:
         log.info("Received KeyboardInterrupt. Shutting down liquidation bid bot")
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
 
 
 if __name__ == "__main__":

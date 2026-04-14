@@ -205,7 +205,7 @@ def load_schedule_params() -> dict:
     }
 
 
-async def main():
+async def run_savings_bot():
 
     # Load schedule
     schedule = load_schedule_params()
@@ -226,12 +226,19 @@ async def main():
     log.info("Savings job schedule: %s", schedule)
     scheduler.start()
 
-    # Keep the event loop running
     try:
         await asyncio.Event().wait()  # Wait indefinitely until interrupted
-    except KeyboardInterrupt:
+    finally:
         log.info("Shutting down scheduler...")
         scheduler.shutdown()
 
+
+def main():
+    try:
+        asyncio.run(run_savings_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down savings bot")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -12,8 +12,10 @@
 
 import os
 import asyncio
+import logging.config
 from dotenv import load_dotenv
 from pprint import pprint
+import yaml
 
 # NOTE: Comment out maxRetries parameter in WsClientFactory.py
 #   in the python-okx package, so that this script will continue to try to
@@ -27,6 +29,14 @@ from orders import Orders
 from orderBook import OrderBook
 from balances import Balances
 from utils import SPOT
+
+
+if os.path.exists("log_conf.yaml"):
+    with open("log_conf.yaml", "r") as f:
+        config = yaml.safe_load(f)
+        logging.config.dictConfig(config)
+
+log = logging.getLogger("recharge_bot")
 
 
 def get_market(base, quote):
@@ -266,7 +276,13 @@ async def run_recharge_bot(collateral, stable, proxy_instrument, proxy, verbose=
         await asyncio.sleep(RUN_INTERVAL)
 
 
-if __name__ == '__main__':
+def main():
+    try:
+        asyncio.run(run_recharge_bot(None, None, None, None))
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down recharge bot")
 
-    asyncio.run(run_recharge_bot(collateral, stable, proxy_instrument, proxy, verbose))
+
+if __name__ == '__main__':
+    main()
 

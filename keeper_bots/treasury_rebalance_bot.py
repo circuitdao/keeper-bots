@@ -65,9 +65,10 @@ async def run_bot():
 
 
 def main():
-    import asyncio
-
-    asyncio.run(run_bot())
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down treasury rebalance bot")
 
 
 if __name__ == "__main__":

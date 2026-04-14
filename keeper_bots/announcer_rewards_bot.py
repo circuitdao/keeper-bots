@@ -161,7 +161,10 @@ async def run_announcer_rewards_bot():
 
 
 def main():
-    asyncio.run(run_announcer_rewards_bot())
+    try:
+        asyncio.run(run_announcer_rewards_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down announcer rewards bot")
 
 
 if __name__ == "__main__":

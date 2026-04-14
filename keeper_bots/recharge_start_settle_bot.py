@@ -167,7 +167,13 @@ async def run_recharge_start_settle_bot():
         await asyncio.sleep(RUN_INTERVAL)
 
 
-if __name__ == '__main__':
+def main():
+    try:
+        asyncio.run(run_recharge_start_settle_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down recharge start/settle bot")
 
-    asyncio.run(run_recharge_start_settle_bot())
+
+if __name__ == '__main__':
+    main()
 

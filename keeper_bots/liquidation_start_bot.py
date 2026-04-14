@@ -180,14 +180,10 @@ async def run_liquidation_start_bot():
 
 
 def main():
-    # asyncio.run(run_liquidation_start_bot())
-    loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(run_liquidation_start_bot())
+        asyncio.run(run_liquidation_start_bot())
     except KeyboardInterrupt:
         log.info("Received KeyboardInterrupt. Shutting down liquidation start bot")
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
 
 
 if __name__ == "__main__":

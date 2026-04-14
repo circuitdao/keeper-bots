@@ -94,9 +94,10 @@ async def run_oracle():
 
 
 def main():
-    import asyncio
-
-    asyncio.run(run_oracle())
+    try:
+        asyncio.run(run_oracle())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down oracle update bot")
 
 
 if __name__ == "__main__":

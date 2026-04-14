@@ -154,5 +154,12 @@ async def run_governance_implement_bot():
         await rpc_client.close()
 
 
+def main():
+    try:
+        asyncio.run(run_governance_implement_bot())
+    except KeyboardInterrupt:
+        log.info("Received KeyboardInterrupt. Shutting down governance implement bot")
+
+
 if __name__ == "__main__":
-    asyncio.run(run_governance_implement_bot())
+    main()
