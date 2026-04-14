@@ -1012,7 +1012,7 @@ urllib3 = "2.6.3"
 type = "git"
 url = "https://github.com/circuitdao/circuit-cli.git"
 reference = "main"
-resolved_reference = "7c49869b7b821331155a22bd7101d30e688c670f"
+resolved_reference = "bb1b071ff4c3e5694751c2d03637291345fb32e3"
 
 [[package]]
 name = "click"
