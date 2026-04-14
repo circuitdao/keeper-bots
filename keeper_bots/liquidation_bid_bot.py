@@ -622,16 +622,17 @@ async def run_liquidation_bid_bot():
     await okx_order_book.connect()
     await okx_order_book.subscribe()
 
-    # Wait for order book to initialize
-    max_wait = 30
-    wait_interval = 0.5
-    waited = 0
-    while not okx_order_book.initialized and waited < max_wait:
-        await asyncio.sleep(wait_interval)
-        waited += wait_interval
+    try:
+        # Wait for order book to initialize
+        max_wait = 30
+        wait_interval = 0.5
+        waited = 0
+        while not okx_order_book.initialized and waited < max_wait:
+            await asyncio.sleep(wait_interval)
+            waited += wait_interval
 
-    if not okx_order_book.initialized:
-        raise ValueError("Order book not initialized")
+        if not okx_order_book.initialized:
+            raise ValueError("Order book not initialized")
 
     # Instantiate trade API
     if not all([key, secret, passphrase]):
@@ -891,6 +892,10 @@ async def run_liquidation_bid_bot():
             continue
 
         await asyncio.sleep(RUN_INTERVAL)
+    finally:
+        log.info("Closing OKX WebSocket connection...")
+        if okx_order_book.ws is not None:
+            await okx_order_book.ws.factory.close()
 
 
 def main():
