@@ -622,17 +622,16 @@ async def run_liquidation_bid_bot():
     await okx_order_book.connect()
     await okx_order_book.subscribe()
 
-    try:
-        # Wait for order book to initialize
-        max_wait = 30
-        wait_interval = 0.5
-        waited = 0
-        while not okx_order_book.initialized and waited < max_wait:
-            await asyncio.sleep(wait_interval)
-            waited += wait_interval
+    # Wait for order book to initialize
+    max_wait = 30
+    wait_interval = 0.5
+    waited = 0
+    while not okx_order_book.initialized and waited < max_wait:
+        await asyncio.sleep(wait_interval)
+        waited += wait_interval
 
-        if not okx_order_book.initialized:
-            raise ValueError("Order book not initialized")
+    if not okx_order_book.initialized:
+        raise ValueError("Order book not initialized")
 
     # Instantiate trade API
     if not all([key, secret, passphrase]):
@@ -652,246 +651,247 @@ async def run_liquidation_bid_bot():
     # Fire immediately on first loop to verify key is valid at startup
     last_okx_heartbeat = time.monotonic() - HEARTBEAT_INTERVAL
 
-    while True:
-        await rpc_client.set_fee_per_cost()
+    try:
+        while True:
+            await rpc_client.set_fee_per_cost()
 
-        if time.monotonic() - last_okx_heartbeat >= HEARTBEAT_INTERVAL:
+            if time.monotonic() - last_okx_heartbeat >= HEARTBEAT_INTERVAL:
+                try:
+                    await accountAPI.get_account_balance()
+                    log.info("OKX API heartbeat: balance query successful")
+                except Exception as err:
+                    log.warning("OKX API heartbeat failed. %s: %s", type(err).__name__, err)
+                last_okx_heartbeat = time.monotonic()
+
             try:
-                await accountAPI.get_account_balance()
-                log.info("OKX API heartbeat: balance query successful")
+                state = await rpc_client.upkeep_state(vaults=True)
             except Exception as err:
-                log.warning("OKX API heartbeat failed. %s: %s", type(err).__name__, err)
-            last_okx_heartbeat = time.monotonic()
+                log.error("Failed to get state of vaults. %s: %s", type(err).__name__, err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
-        try:
-            state = await rpc_client.upkeep_state(vaults=True)
-        except Exception as err:
-            log.error("Failed to get state of vaults. %s: %s", type(err).__name__, err)
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
+            vaults_in_liquidation = state.get("vaults_in_liquidation", [])
 
-        vaults_in_liquidation = state.get("vaults_in_liquidation", [])
+            if not vaults_in_liquidation:
+                log.info("No vaults in liquidation. Sleeping for %s seconds", RUN_INTERVAL)
+                await asyncio.sleep(RUN_INTERVAL)
+                continue
 
-        if not vaults_in_liquidation:
-            log.info("No vaults in liquidation. Sleeping for %s seconds", RUN_INTERVAL)
-            await asyncio.sleep(RUN_INTERVAL)
-            continue
+            log.info("Found %s vaults in liquidation", len(vaults_in_liquidation))
 
-        log.info("Found %s vaults in liquidation", len(vaults_in_liquidation))
-
-        # get wallet balances
-        try:
-            balances = await rpc_client.wallet_balances()
-        except Exception as err:
-            log.error("Failed to get wallet balances. %s: %s", type(err).__name__, err)
-
-        available_xch_amount = balances.get("xch", None)
-        available_byc_amount = balances.get("byc", None)
-
-        if available_xch_amount is None:
-            log.error(
-                "Failed to get %s wallet balance (None). Sleeping for %s seconds",
-                collateral_symbol,
-                CONTINUE_DELAY,
-            )
-            asyncio.sleep(CONTINUE_DELAY)
-            continue
-
-        if available_byc_amount is None:
-            log.error(
-                "Failed to get BYC wallet balance (None). Sleeping for %s seconds",
-                CONTINUE_DELAY,
-            )
-            asyncio.sleep(CONTINUE_DELAY)
-            continue
-
-        # Check how much debt there is. Then borrow an appropriate amount of BYC
-        price = okx_order_book.mid_price()  # conservative estimate of market price
-        if price is None:
-            log.error(
-                "Order book mid price unavailable. Sleeping for %s seconds",
-                CONTINUE_DELAY,
-            )
-            continue
-
-        debts = []
-        for vault in vaults_in_liquidation:
+            # get wallet balances
             try:
-                auction_state = Program.fromhex(vault["auction_state"])
-                initiator_incentive_balance = auction_state.at("rrrrrf").as_int()
-                byc_to_treasury_balance = auction_state.at("rrrrrrrf").as_int()
-                byc_to_melt_balance = auction_state.at("rrrrrrrrf").as_int()
-                start_price = auction_state.at("rf").as_int() / PRICE_PRECISION
-            except Exception:
-                raise ValueError(
-                    f"Failed to destructure auction state of vault {vault['name']}"
-                )
-            debts.append(
-                initiator_incentive_balance
-                + byc_to_treasury_balance
-                + byc_to_melt_balance
-            )
-            if start_price < price:
-                price = start_price
-
-        debt = sum(debts)
-
-        # TODO: split wallet BYC balance into coins large enough for each auction.
-        #  then bid with those specific coins.
-
-        if available_byc_amount < debt:
-            # TODO: take OKX XCH balance into account when deciding how much byc to borrow ? See liq task
-            # get min debt amount from Statutes
-            min_debt = 100 * MCAT  # fall back amount
-            liquidation_ratio_pct = 170  # fall back amount
-            try:
-                statutes = await rpc_client.statutes_list()
+                balances = await rpc_client.wallet_balances()
             except Exception as err:
+                log.error("Failed to get wallet balances. %s: %s", type(err).__name__, err)
+
+            available_xch_amount = balances.get("xch", None)
+            available_byc_amount = balances.get("byc", None)
+
+            if available_xch_amount is None:
                 log.error(
-                    "Failed to get Statutes. Continuing with fallback values. %s: %s.",
-                    type(err).__name__,
-                    err,
+                    "Failed to get %s wallet balance (None). Sleeping for %s seconds",
+                    collateral_symbol,
+                    CONTINUE_DELAY,
                 )
-            else:
+                asyncio.sleep(CONTINUE_DELAY)
+                continue
+
+            if available_byc_amount is None:
+                log.error(
+                    "Failed to get BYC wallet balance (None). Sleeping for %s seconds",
+                    CONTINUE_DELAY,
+                )
+                asyncio.sleep(CONTINUE_DELAY)
+                continue
+
+            # Check how much debt there is. Then borrow an appropriate amount of BYC
+            price = okx_order_book.mid_price()  # conservative estimate of market price
+            if price is None:
+                log.error(
+                    "Order book mid price unavailable. Sleeping for %s seconds",
+                    CONTINUE_DELAY,
+                )
+                continue
+
+            debts = []
+            for vault in vaults_in_liquidation:
                 try:
-                    min_debt = int(
-                        statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"]
-                    )
-                    liquidation_ratio_pct = int(
-                        statutes["implemented_statutes"]["VAULT_LIQUIDATION_RATIO_PCT"]
-                    )
+                    auction_state = Program.fromhex(vault["auction_state"])
+                    initiator_incentive_balance = auction_state.at("rrrrrf").as_int()
+                    byc_to_treasury_balance = auction_state.at("rrrrrrrf").as_int()
+                    byc_to_melt_balance = auction_state.at("rrrrrrrrf").as_int()
+                    start_price = auction_state.at("rf").as_int() / PRICE_PRECISION
                 except Exception:
-                    log.error(
-                        "Failed to get Statutes values. Continuing with fallback values"
+                    raise ValueError(
+                        f"Failed to destructure auction state of vault {vault['name']}"
                     )
-
-            collateralization_ratio = (
-                max(
-                    100 + 3 * (liquidation_ratio_pct - 100),
-                    LIQUIDATION_COLLATERAL_RATIO_PCT,
+                debts.append(
+                    initiator_incentive_balance
+                    + byc_to_treasury_balance
+                    + byc_to_melt_balance
                 )
-                / 100
-            )
+                if start_price < price:
+                    price = start_price
 
-            borrow_amount = max(min_debt, debt - available_byc_amount)  # in mBYC
-            deposit_amount = int(
-                min(
-                    max(
-                        available_xch_amount - MOJOS_PER_XCH,
-                        0,
-                    ),  # keep 1 XCH for fees. TODO: better heuristic
-                    MOJOS_PER_XCH
-                    * (borrow_amount / MCAT)
-                    * collateralization_ratio
-                    / price,
-                )
-            )  # in mojos
-            borrow_amount = int(
-                MCAT
-                * (deposit_amount / MOJOS_PER_XCH)
-                * price
-                / collateralization_ratio
-            )  # in mBYC
+            debt = sum(debts)
 
-            if deposit_amount > 0:
-                log.info(
-                    "Depositing %.12f XCH to borrow %.3f BYC to bid on debt. Existing wallet balances: %.12f XCH, %.3f BYC",
-                    deposit_amount / MOJOS_PER_XCH,
-                    borrow_amount / MCAT,
-                    available_xch_amount / MOJOS_PER_XCH,
-                    available_byc_amount / MCAT,
-                )
+            # TODO: split wallet BYC balance into coins large enough for each auction.
+            #  then bid with those specific coins.
 
-                # borrow enough BYC to liquidate all vaults
-                # if borrowing fails, too bad, we proceed to liquidate with what BYC we have
+            if available_byc_amount < debt:
+                # TODO: take OKX XCH balance into account when deciding how much byc to borrow ? See liq task
+                # get min debt amount from Statutes
+                min_debt = 100 * MCAT  # fall back amount
+                liquidation_ratio_pct = 170  # fall back amount
                 try:
-                    response = await rpc_client.vault_deposit(deposit_amount)
+                    statutes = await rpc_client.statutes_list()
                 except Exception as err:
                     log.error(
-                        "Failed to deposit to vault. %s: %s", type(err).__name__, err
+                        "Failed to get Statutes. Continuing with fallback values. %s: %s.",
+                        type(err).__name__,
+                        err,
                     )
                 else:
-                    if response.get("status") != "success":
+                    try:
+                        min_debt = int(
+                            statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"]
+                        )
+                        liquidation_ratio_pct = int(
+                            statutes["implemented_statutes"]["VAULT_LIQUIDATION_RATIO_PCT"]
+                        )
+                    except Exception:
                         log.error(
-                            "Failed to deposit %.12f XCH: %s",
-                            deposit_amount / MOJOS_PER_XCH,
-                            response,
+                            "Failed to get Statutes values. Continuing with fallback values"
+                        )
+
+                collateralization_ratio = (
+                    max(
+                        100 + 3 * (liquidation_ratio_pct - 100),
+                        LIQUIDATION_COLLATERAL_RATIO_PCT,
+                    )
+                    / 100
+                )
+
+                borrow_amount = max(min_debt, debt - available_byc_amount)  # in mBYC
+                deposit_amount = int(
+                    min(
+                        max(
+                            available_xch_amount - MOJOS_PER_XCH,
+                            0,
+                        ),  # keep 1 XCH for fees. TODO: better heuristic
+                        MOJOS_PER_XCH
+                        * (borrow_amount / MCAT)
+                        * collateralization_ratio
+                        / price,
+                    )
+                )  # in mojos
+                borrow_amount = int(
+                    MCAT
+                    * (deposit_amount / MOJOS_PER_XCH)
+                    * price
+                    / collateralization_ratio
+                )  # in mBYC
+
+                if deposit_amount > 0:
+                    log.info(
+                        "Depositing %.12f XCH to borrow %.3f BYC to bid on debt. Existing wallet balances: %.12f XCH, %.3f BYC",
+                        deposit_amount / MOJOS_PER_XCH,
+                        borrow_amount / MCAT,
+                        available_xch_amount / MOJOS_PER_XCH,
+                        available_byc_amount / MCAT,
+                    )
+
+                    # borrow enough BYC to liquidate all vaults
+                    # if borrowing fails, too bad, we proceed to liquidate with what BYC we have
+                    try:
+                        response = await rpc_client.vault_deposit(deposit_amount)
+                    except Exception as err:
+                        log.error(
+                            "Failed to deposit to vault. %s: %s", type(err).__name__, err
                         )
                     else:
-                        log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
-                        try:
-                            response = await rpc_client.vault_borrow(borrow_amount)
-                        except Exception as err:
-                            log.error(
-                                "Failed to borrow BYC. %s: %s", type(err).__name__, err
-                            )
                         if response.get("status") != "success":
                             log.error(
-                                "Failed to borrow %.3f BYC: %s",
-                                borrow_amount / MCAT,
-                                json.dumps(response),
+                                "Failed to deposit %.12f XCH: %s",
+                                deposit_amount / MOJOS_PER_XCH,
+                                response,
                             )
                         else:
-                            log.info("Borrowed %.3f BYC", borrow_amount / MCAT)
-                            available_byc_amount += borrow_amount
+                            log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
+                            try:
+                                response = await rpc_client.vault_borrow(borrow_amount)
+                            except Exception as err:
+                                log.error(
+                                    "Failed to borrow BYC. %s: %s", type(err).__name__, err
+                                )
+                            if response.get("status") != "success":
+                                log.error(
+                                    "Failed to borrow %.3f BYC: %s",
+                                    borrow_amount / MCAT,
+                                    json.dumps(response),
+                                )
+                            else:
+                                log.info("Borrowed %.3f BYC", borrow_amount / MCAT)
+                                available_byc_amount += borrow_amount
 
-        liquidation_tasks = []
-        for vault in vaults_in_liquidation:
-            task = asyncio.create_task(
-                liquidate_vault(
-                    vault["name"],
-                    rpc_client,
-                    okx_order_book,
-                    tradeAPI,
-                    accountAPI,
-                    base_decimals,
-                    price_decimals,
-                    collateral_symbol,
-                    stablecoin_symbol,
-                    proxy_symbol,
-                    market_symbol,
-                    price_symbol,
+            liquidation_tasks = []
+            for vault in vaults_in_liquidation:
+                task = asyncio.create_task(
+                    liquidate_vault(
+                        vault["name"],
+                        rpc_client,
+                        okx_order_book,
+                        tradeAPI,
+                        accountAPI,
+                        base_decimals,
+                        price_decimals,
+                        collateral_symbol,
+                        stablecoin_symbol,
+                        proxy_symbol,
+                        market_symbol,
+                        price_symbol,
+                    )
                 )
-            )
-            liquidation_tasks.append(task)
+                liquidation_tasks.append(task)
 
-        bid_failed = 0
-        bid_not_possible = 0
-        bid_not_profitable = 0
-        bid_not_reconciled = 0
+            bid_failed = 0
+            bid_not_possible = 0
+            bid_not_profitable = 0
+            bid_not_reconciled = 0
 
-        results = await asyncio.gather(*liquidation_tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                bid_failed += 1
-                log.error(
-                    f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) failed: {result}"
-                )
-            elif result == BidFail.NOT_POSSIBLE:
-                bid_not_possible += 1
-                log.info(
-                    f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded, but vault not liquidated: {result}"
-                )
-            elif result == BidFail.NOT_PROFITABLE:
-                bid_not_profitable += 1
-                log.info(
-                    f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded, but vault not liquidated: {result}"
-                )
-            elif result == BidFail.NOT_RECONCILED:
-                bid_not_reconciled += 1
-                log.info(
-                    f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded in liquidating, but failed to reconcile position: {result}"
-                )
-            else:
-                log.info(
-                    f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded: {result}"
-                )
+            results = await asyncio.gather(*liquidation_tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    bid_failed += 1
+                    log.error(
+                        f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) failed: {result}"
+                    )
+                elif result == BidFail.NOT_POSSIBLE:
+                    bid_not_possible += 1
+                    log.info(
+                        f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded, but vault not liquidated: {result}"
+                    )
+                elif result == BidFail.NOT_PROFITABLE:
+                    bid_not_profitable += 1
+                    log.info(
+                        f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded, but vault not liquidated: {result}"
+                    )
+                elif result == BidFail.NOT_RECONCILED:
+                    bid_not_reconciled += 1
+                    log.info(
+                        f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded in liquidating, but failed to reconcile position: {result}"
+                    )
+                else:
+                    log.info(
+                        f"Liquidation task {i} (vault {vaults_in_liquidation[i]['name']}) succeeded: {result}"
+                    )
 
-        if bid_failed > 0 or bid_not_possible > 0:
-            await asyncio.sleep(CONTINUE_DELAY)
-            continue
+            if bid_failed > 0 or bid_not_possible > 0:
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
-        await asyncio.sleep(RUN_INTERVAL)
+            await asyncio.sleep(RUN_INTERVAL)
     finally:
         log.info("Closing OKX WebSocket connection...")
         if okx_order_book.ws is not None:
