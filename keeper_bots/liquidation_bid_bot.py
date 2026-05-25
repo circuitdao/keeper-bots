@@ -559,7 +559,7 @@ async def run_liquidation_bid_bot():
     parser = argparse.ArgumentParser(
         description="Liquidation bid bot for Circuit protocol"
     )
-    parser.add_argument("-e", "--environment", choices=["demo", "live"], default="demo")
+    parser.add_argument("-e", "--environment", choices=["demo", "live"], default="live")
     parser.add_argument("-k", "--private-key-prefix", default="")
     parser.add_argument(
         "-v",
