@@ -693,7 +693,11 @@ async def run_liquidation_bid_bot():
                     )
                     if resp.get("code") == "0":
                         ord_id = resp["data"][0]["ordId"]
-                        await tradeAPI.cancel_order(instId=market_symbol, ordId=ord_id)
+                        # cancel_order has a typo in okx_async (CANAEL_ORDER); call directly
+                        await tradeAPI._request_with_params(
+                            "POST", "/api/v5/trade/cancel-order",
+                            {"instId": market_symbol, "ordId": ord_id},
+                        )
                         log.info("OKX API heartbeat: order placed and cancelled (ordId=%s)", ord_id)
                     else:
                         log.warning("OKX API heartbeat order failed: %s", resp)
