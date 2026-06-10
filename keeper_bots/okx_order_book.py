@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime
 from pprint import pprint
 import asyncio
@@ -62,6 +63,7 @@ class OkxOrderBook:
         self.book = {}
         self.url = url
         self.initialized = False
+        self.last_update_time: float = 0.0
         self._lock = asyncio.Lock()
         self.logger = logger or logging.getLogger(__name__)
 
@@ -162,6 +164,7 @@ class OkxOrderBook:
                         self.book["bids"][price_float] = depth[1]
 
                 self.initialized = True
+                self.last_update_time = time.monotonic()
 
             elif message["action"] == "update":
                 if self.verbose:
@@ -185,7 +188,6 @@ class OkxOrderBook:
                             else:
                                 # Remove price level if volume is 0
                                 self.book[side].pop(price_float, None)
-
                     ## Validate order book depth
                     # asks_depth = len(self.book.get("asks", {}))
                     # bids_depth = len(self.book.get("bids", {}))
@@ -198,7 +200,7 @@ class OkxOrderBook:
                     #     self.logger.warning(
                     #         f"OKX order book bid depth is {bids_depth}, expected 400"
                     #     )
-
+                self.last_update_time = time.monotonic()
             else:
                 raise Exception(
                     f"Unknown action {message['action']} returned in callback"

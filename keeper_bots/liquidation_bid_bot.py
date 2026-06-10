@@ -599,6 +599,27 @@ async def run_liquidation_bid_bot():
 
     log.info("Running liquidation bid bot in %s environment", trade_env.name)
 
+    async def reconnect_order_book() -> bool:
+        """Reconnect the OKX order book WebSocket. Returns True on success."""
+        log.warning("OKX order book stale — reconnecting WebSocket")
+        okx_order_book.initialized = False
+        okx_order_book.book = {}
+        try:
+            await okx_order_book.connect()
+            await okx_order_book.subscribe()
+        except Exception as err:
+            log.error("OKX WebSocket reconnect failed: %s", err)
+            return False
+        waited = 0.0
+        while not okx_order_book.initialized and waited < 30:
+            await asyncio.sleep(0.5)
+            waited += 0.5
+        if okx_order_book.initialized:
+            log.info("OKX order book reconnected  mid=%.4f", okx_order_book.mid_price())
+            return True
+        log.error("OKX order book did not receive snapshot after reconnect")
+        return False
+
     stablecoin_symbol = "BYC"  # Circuit stablecoin (BYC)
 
     # BYC proxy asset to be used for hedging
@@ -653,6 +674,11 @@ async def run_liquidation_bid_bot():
 
     try:
         while True:
+            if time.monotonic() - okx_order_book.last_update_time > 60:
+                if not await reconnect_order_book():
+                    await asyncio.sleep(CONTINUE_DELAY)
+                    continue
+
             await rpc_client.set_fee_per_cost()
 
             if time.monotonic() - last_okx_heartbeat >= HEARTBEAT_INTERVAL:
@@ -660,20 +686,26 @@ async def run_liquidation_bid_bot():
                     await accountAPI.get_account_balance()
                     log.info("OKX API heartbeat: balance query successful")
                 except Exception as err:
-                    log.warning("OKX API heartbeat failed. %s: %s", type(err).__name__, err)
+                    log.warning(
+                        "OKX API heartbeat failed. %s: %s", type(err).__name__, err
+                    )
                 last_okx_heartbeat = time.monotonic()
 
             try:
                 state = await rpc_client.upkeep_state(vaults=True)
             except Exception as err:
-                log.error("Failed to get state of vaults. %s: %s", type(err).__name__, err)
+                log.error(
+                    "Failed to get state of vaults. %s: %s", type(err).__name__, err
+                )
                 await asyncio.sleep(CONTINUE_DELAY)
                 continue
 
             vaults_in_liquidation = state.get("vaults_in_liquidation", [])
 
             if not vaults_in_liquidation:
-                log.info("No vaults in liquidation. Sleeping for %s seconds", RUN_INTERVAL)
+                log.info(
+                    "No vaults in liquidation. Sleeping for %s seconds", RUN_INTERVAL
+                )
                 await asyncio.sleep(RUN_INTERVAL)
                 continue
 
@@ -683,7 +715,9 @@ async def run_liquidation_bid_bot():
             try:
                 balances = await rpc_client.wallet_balances()
             except Exception as err:
-                log.error("Failed to get wallet balances. %s: %s", type(err).__name__, err)
+                log.error(
+                    "Failed to get wallet balances. %s: %s", type(err).__name__, err
+                )
 
             available_xch_amount = balances.get("xch", None)
             available_byc_amount = balances.get("byc", None)
@@ -758,7 +792,9 @@ async def run_liquidation_bid_bot():
                             statutes["implemented_statutes"]["VAULT_MINIMUM_DEBT"]
                         )
                         liquidation_ratio_pct = int(
-                            statutes["implemented_statutes"]["VAULT_LIQUIDATION_RATIO_PCT"]
+                            statutes["implemented_statutes"][
+                                "VAULT_LIQUIDATION_RATIO_PCT"
+                            ]
                         )
                     except Exception:
                         log.error(
@@ -808,7 +844,9 @@ async def run_liquidation_bid_bot():
                         response = await rpc_client.vault_deposit(deposit_amount)
                     except Exception as err:
                         log.error(
-                            "Failed to deposit to vault. %s: %s", type(err).__name__, err
+                            "Failed to deposit to vault. %s: %s",
+                            type(err).__name__,
+                            err,
                         )
                     else:
                         if response.get("status") != "success":
@@ -818,12 +856,16 @@ async def run_liquidation_bid_bot():
                                 response,
                             )
                         else:
-                            log.info("Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH)
+                            log.info(
+                                "Deposited %.12f XCH", deposit_amount / MOJOS_PER_XCH
+                            )
                             try:
                                 response = await rpc_client.vault_borrow(borrow_amount)
                             except Exception as err:
                                 log.error(
-                                    "Failed to borrow BYC. %s: %s", type(err).__name__, err
+                                    "Failed to borrow BYC. %s: %s",
+                                    type(err).__name__,
+                                    err,
                                 )
                             if response.get("status") != "success":
                                 log.error(
