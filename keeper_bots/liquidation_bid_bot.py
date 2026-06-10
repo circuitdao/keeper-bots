@@ -33,7 +33,7 @@ from keeper_bots.utils import SPOT
 PRICE_PRECISION = 100
 MOJOS_PER_XCH = 10**12
 MCAT = 1000
-HEARTBEAT_INTERVAL = 86400  # seconds; keep OKX API key active
+HEARTBEAT_INTERVAL = 3600  # seconds; keep OKX API key active
 
 
 class TradeEnv(Enum):
