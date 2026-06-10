@@ -683,8 +683,20 @@ async def run_liquidation_bid_bot():
 
             if time.monotonic() - last_okx_heartbeat >= HEARTBEAT_INTERVAL:
                 try:
-                    await accountAPI.get_account_balance()
-                    log.info("OKX API heartbeat: balance query successful")
+                    resp = await tradeAPI.place_order(
+                        instId=market_symbol,
+                        tdMode="cash",
+                        side="buy",
+                        ordType="limit",
+                        px="0.001",
+                        sz="0.1",
+                    )
+                    if resp.get("code") == "0":
+                        ord_id = resp["data"][0]["ordId"]
+                        await tradeAPI.cancel_order(instId=market_symbol, ordId=ord_id)
+                        log.info("OKX API heartbeat: order placed and cancelled (ordId=%s)", ord_id)
+                    else:
+                        log.warning("OKX API heartbeat order failed: %s", resp)
                 except Exception as err:
                     log.warning(
                         "OKX API heartbeat failed. %s: %s", type(err).__name__, err
