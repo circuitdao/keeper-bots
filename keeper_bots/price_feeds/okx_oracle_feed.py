@@ -19,6 +19,11 @@ logging.basicConfig(
 
 OKX_WS = "wss://ws.okx.com:8443/ws/v5/public"
 
+# If no frame at all (data or pong) arrives within this many seconds, treat the
+# socket as dead and reconnect. Heartbeat pongs reset this, so it only fires on a
+# fully dead connection; data starvation is handled by the connection watchdog.
+RECEIVE_TIMEOUT = 45
+
 
 async def okx_ws(oracle, feed_instance=None):
     """
@@ -40,12 +45,17 @@ async def okx_ws(oracle, feed_instance=None):
                     await ws.send_json(book_ch)
                     book_mids = {}
                     logging.info("Connected to OKX WebSocket and subscribed to channels.")
-                    async for msg in ws:
+                    while True:
+                        msg = await ws.receive(timeout=RECEIVE_TIMEOUT)
+                        if msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSING,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            raise ConnectionError(f"OKX WebSocket closed ({msg.type.name})")
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
-                        # Track any WebSocket message for connection health
-                        if feed_instance is not None:
-                            feed_instance.last_message_ts = time.time()
                         data = json.loads(msg.data)
                         if "event" in data:
                             if data["event"] == "subscribe":
@@ -62,6 +72,10 @@ async def okx_ws(oracle, feed_instance=None):
 
                         ch = data["arg"]["channel"]
                         instId = data["arg"]["instId"]
+
+                        # Mark liveness on real market data only (not on subscription acks)
+                        if feed_instance is not None:
+                            feed_instance.last_message_ts = time.time()
 
                         if ch == "trades" and "data" in data:
                             for t in data["data"]:
@@ -133,7 +147,7 @@ async def okx_ws(oracle, feed_instance=None):
                                 usdt_price_str,
                             )
                             oracle.last_pub = now
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
             logging.error("OKX WebSocket connection error: %s. Reconnecting...", e)
             await asyncio.sleep(2 + 3 * random.random())
 

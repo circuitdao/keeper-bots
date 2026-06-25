@@ -224,9 +224,12 @@ class BaseOracleFeed:
         self._tasks = []
         self.book_mids = {}  # Store current book mid prices for fallback
 
-        # Connection health tracking
-        self.last_message_ts = 0  # Timestamp of last WebSocket message received
-        self.connection_timeout_seconds = 900  # 15 minutes - feed excluded if no messages for this duration
+        # Connection health tracking. last_message_ts is updated only when actual
+        # market data (a trade or book/ticker update) is ingested, not on control or
+        # keepalive frames, so a feed whose subscription silently drops while the socket
+        # stays alive on ping/pong is still detected as stale.
+        self.last_message_ts = 0  # Timestamp of last market-data message received
+        self.connection_timeout_seconds = 180  # feed excluded / WS restarted after this much data silence
 
     def is_connected(self):
         """Check if feed is receiving WebSocket messages within timeout."""
@@ -247,21 +250,36 @@ class BaseOracleFeed:
         return self
 
     async def _connection_watchdog(self):
-        """Monitor connection health and trigger reconnection if needed."""
+        """Monitor connection health and restart the WebSocket task if it goes silent."""
         while True:
             await asyncio.sleep(10)  # Check every 10 seconds
             if self.last_message_ts > 0:
                 silence_duration = time.time() - self.last_message_ts
                 if silence_duration > self.connection_timeout_seconds:
                     logging.error(
-                        "%s feed silent for %.1fs (timeout: %ds), triggering reconnection",
+                        "%s feed silent for %.1fs (timeout: %ds), restarting WebSocket task",
                         self.exchange_name, silence_duration, self.connection_timeout_seconds
                     )
-                    # Cancel WebSocket task to trigger reconnection
+                    # The WebSocket task is likely hung on a half-open socket that never
+                    # raised an error, so its own reconnect loop can't recover. Cancel it
+                    # and start a fresh one. Cancelling alone is not enough: CancelledError
+                    # propagates out of the task and it dies permanently unless recreated.
                     if self._tasks and len(self._tasks) > 0:
-                        self._tasks[0].cancel()
-                        # Reset to avoid repeated cancellations
+                        ws_task = self._tasks[0]
+                        ws_task.cancel()
+                        try:
+                            await ws_task
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:  # pragma: no cover - defensive
+                            logging.error(
+                                "%s WebSocket task raised while stopping: %s",
+                                self.exchange_name, e
+                            )
+                        # Reset so we don't re-trigger before the new task reconnects.
                         self.last_message_ts = 0
+                        self._tasks[0] = asyncio.create_task(self._create_websocket_task())
+                        logging.info("%s WebSocket task restarted", self.exchange_name)
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         """Stop the feed tasks."""

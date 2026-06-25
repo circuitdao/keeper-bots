@@ -20,6 +20,12 @@ logging.basicConfig(
 KUCOIN_REST_API = "https://api.kucoin.com"
 KUCOIN_TOKEN_ENDPOINT = "/api/v1/bullet-public"
 
+# KuCoin has no protocol-level heartbeat (it uses app-level JSON ping/pong), so we
+# poll with a short receive timeout to keep sending keepalive pings even when the
+# market is quiet, and reconnect only after this much actual market-data silence.
+KUCOIN_RECEIVE_POLL = 8  # seconds; wake at least this often to send a keepalive ping
+KUCOIN_DATA_SILENCE_LIMIT = 120  # seconds of no market data before reconnecting at the source
+
 
 async def get_kucoin_token():
     """Get KuCoin WebSocket token and server info."""
@@ -79,14 +85,33 @@ async def kucoin_ws(oracle, feed_instance=None):
 
                     book_mids = {}
                     last_ping = time.time()
+                    last_data_ts = time.time()  # last time actual market data arrived
                     logging.info("Connected to KuCoin WebSocket and subscribed to channels.")
 
-                    async for msg in ws:
+                    while True:
+                        try:
+                            msg = await ws.receive(timeout=KUCOIN_RECEIVE_POLL)
+                        except asyncio.TimeoutError:
+                            # No frame this poll interval. Keep the link alive with a ping,
+                            # but if there's been no market data for too long the subscription
+                            # is effectively dead -> reconnect at the source.
+                            if time.time() - last_data_ts > KUCOIN_DATA_SILENCE_LIMIT:
+                                raise ConnectionError("KuCoin market-data silence, reconnecting")
+                            now = time.time()
+                            if now - last_ping >= ping_interval / 2000:
+                                await ws.send_json({"id": str(int(now * 1000)), "type": "ping"})
+                                last_ping = now
+                            continue
+
+                        if msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSING,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            raise ConnectionError(f"KuCoin WebSocket closed ({msg.type.name})")
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
-                        # Track any WebSocket message for connection health
-                        if feed_instance is not None:
-                            feed_instance.last_message_ts = time.time()
 
                         data = json.loads(msg.data)
                         msg_type = data.get("type")
@@ -108,6 +133,11 @@ async def kucoin_ws(oracle, feed_instance=None):
 
                         # Handle trade matches
                         elif msg_type == "message":
+                            # Mark liveness on real market data only (not on welcome/ack/pong),
+                            # so a silently-dropped subscription still reads as stale.
+                            last_data_ts = time.time()
+                            if feed_instance is not None:
+                                feed_instance.last_message_ts = last_data_ts
                             topic = data.get("topic", "")
 
                             if "/market/match:" in topic:

@@ -19,6 +19,11 @@ logging.basicConfig(
 
 GATE_WS = "wss://api.gateio.ws/ws/v4/"
 
+# If no frame at all (data or pong) arrives within this many seconds, treat the
+# socket as dead and reconnect. Heartbeat pongs reset this, so it only fires on a
+# fully dead connection; data starvation is handled by the connection watchdog.
+RECEIVE_TIMEOUT = 45
+
 
 async def gate_ws(oracle, feed_instance=None):
     """
@@ -50,13 +55,23 @@ async def gate_ws(oracle, feed_instance=None):
                     book_mids = {}
                     logging.info("Connected to Gate.io WebSocket and subscribed to channels.")
 
-                    async for msg in ws:
+                    while True:
+                        msg = await ws.receive(timeout=RECEIVE_TIMEOUT)
+                        if msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSING,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            raise ConnectionError(f"Gate.io WebSocket closed ({msg.type.name})")
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
-                        # Track any WebSocket message for connection health
-                        if feed_instance is not None:
-                            feed_instance.last_message_ts = time.time()
                         data = json.loads(msg.data)
+
+                        # Mark liveness on real market data only (trade/book updates below),
+                        # not on subscription acks, so a silently-dropped feed reads as stale.
+                        if feed_instance is not None and data.get("event") == "update":
+                            feed_instance.last_message_ts = time.time()
 
                         # Handle subscription confirmation
                         if data.get("event") == "subscribe":
@@ -135,7 +150,7 @@ async def gate_ws(oracle, feed_instance=None):
                                 usdt_price_str,
                             )
                             oracle.last_pub = now
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
             logging.error("Gate.io WebSocket connection error: %s. Reconnecting...", e)
             await asyncio.sleep(2 + 3 * random.random())
 
