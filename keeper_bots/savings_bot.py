@@ -26,7 +26,8 @@ if os.path.exists("log_conf.yaml"):
 log = logging.getLogger("savings_bot")
 
 
-ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
+# .env lives at the keeper-bots repo root (one level above this package dir)
+ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 load_dotenv(ENV_FILE, override=True)
 
 rpc_url = str(os.getenv("RPC_URL")) # Base URL for Circuit RPC API server

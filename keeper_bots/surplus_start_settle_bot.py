@@ -12,6 +12,11 @@ import argparse
 import httpx
 import yaml
 import logging.config
+from dotenv import load_dotenv
+
+from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
+    puzzle_hash_for_synthetic_public_key,
+)
 
 from circuit_cli.client import CircuitRPCClient
 
@@ -24,8 +29,16 @@ if os.path.exists("log_conf.yaml"):
 log = logging.getLogger("surplus_start_settle_bot")
 
 
-RUN_INTERVAL = 1 * 60
-CONTINUE_DELAY = 10
+# .env lives at the keeper-bots repo root (one level above this package dir)
+ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+load_dotenv(ENV_FILE, override=True)
+
+RUN_INTERVAL = int(
+    os.getenv("SURPLUS_START_SETTLE_RUN_INTERVAL", "60")
+)  # Wait (in seconds) between runs
+CONTINUE_DELAY = int(
+    os.getenv("SURPLUS_START_SETTLE_CONTINUE_DELAY", "10")
+)  # Wait (in seconds) before running again after a failed run
 
 
 async def run_surplus_start_settle_bot():
@@ -35,9 +48,20 @@ async def run_surplus_start_settle_bot():
         "--rpc-url",
         type=str,
         help="Base URL for the Circuit RPC API server",
-        default="http://localhost:8000",
+        default=os.environ.get("RPC_URL", "http://localhost:8000"),
     )
-    parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
+    parser.add_argument(
+        "--add-sig-data",
+        type=str,
+        default=os.environ.get("ADD_SIG_DATA"),
+        help="Additional signature data",
+    )
+    parser.add_argument(
+        "--fee-per-cost",
+        type=str,
+        default=os.environ.get("FEE_PER_COST", "fast"),
+        help="Fee per cost for transactions",
+    )
     parser.add_argument(
         "--private-key", "-p",
         type=str,
@@ -46,8 +70,7 @@ async def run_surplus_start_settle_bot():
     )
     parser.add_argument(
         "--settle-all",
-        action="store_true",
-        type=bool,
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Settle all surplus auctions, not just the ones we have won"
     )
@@ -58,7 +81,9 @@ async def run_surplus_start_settle_bot():
     if not args.private_key:
         raise ValueError("No private key provided")
 
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
+    rpc_client = CircuitRPCClient(
+        args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost
+    )
 
     while True:
 
@@ -80,7 +105,12 @@ async def run_surplus_start_settle_bot():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        if treasury["can_start_surplus_auction"]:
+        can_start = treasury["can_start_surplus_auction"]
+        log.info(
+            "Surplus Auction can%s be started", "" if can_start else "not"
+        )
+
+        if can_start:
 
             # start a surplus auction
             try:
@@ -116,16 +146,30 @@ async def run_surplus_start_settle_bot():
             await asyncio.sleep(CONTINUE_DELAY)
             continue
 
-        my_puzzle_hashes = []
-        for k in rpc_client.synthetic_public_keys:
-            my_puzzle_hashes.append(puzzle_for_synthetic_public_key(pub_key).get_tree_hash())
+        settleable = [c for c in surplus_coins if c["can_be_settled"]]
+        if settleable:
+            log.info(
+                "%s Surplus Auction(s) can be settled: %s",
+                len(settleable),
+                ", ".join(c["name"] for c in settleable),
+            )
+        else:
+            log.info("No Surplus Auction can be settled")
+
+        my_puzzle_hashes = {
+            puzzle_hash_for_synthetic_public_key(pk).hex()
+            for pk in rpc_client.synthetic_public_keys
+        }
 
         for c in surplus_coins:
 
-            if c["is_expired"]:
+            if c["can_be_settled"]:
 
-                # if desired, only settle if we are the winner
-                if not args.settle_all and not bytes32.fromhex(c["last_bid"]["target_puzzle_hash"]) in my_puzzle_hashes:
+                # if desired, only settle auctions we have won
+                if (
+                    not args.settle_all
+                    and c["last_bid"]["target_puzzle_hash"] not in my_puzzle_hashes
+                ):
                     log.info("Skipping settlement of expired Surplus Auction %s. Not won by us", c["name"])
                     continue
 

@@ -180,6 +180,12 @@ poetry run python -m keeper_bots.announcer_configure_bot --dry-run
 - Starts and settles surplus auctions
 - Usage: `python -m keeper_bots.surplus_start_settle_bot`
 
+**surplus_bid_bot**
+- Bids CRT for the BYC lot in the active surplus auction (assumes at most one at a time)
+- Bids the minimum increment by default; optionally set `SURPLUS_BID_MIN_CRT_PRICE` (CRT/BYC price, ie BYC per CRT) to stop bidding once the lot values your CRT below that floor
+- Optionally set `SURPLUS_BID_STARTING_CRT_PRICE` (CRT/BYC price, must be >= the min price) to open with an aggressive bid and speed the auction along
+- Usage: `python -m keeper_bots.surplus_bid_bot`
+
 ### Treasury and Savings
 
 **treasury_rebalance_bot**
