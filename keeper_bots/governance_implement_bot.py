@@ -79,7 +79,12 @@ async def run_governance_implement_bot():
             log.info(f"Found {len(bills)} implementable bills")
 
             # get the latest fee per cost
-            await rpc_client.set_fee_per_cost()
+            try:
+                await rpc_client.set_fee_per_cost()
+            except Exception as err:
+                log.error("Failed to set fee_per_cost: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
             failed_implementations = 0
             for bill in bills:

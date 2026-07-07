@@ -310,7 +310,13 @@ async def run_announcer():
                 + (f"  DEPOSIT: {announcer['deposit']} -> {new_deposit}" if new_deposit is not None else "")
                 + (f"  VALUE_TTL: {announcer['price_ttl']} -> {new_price_ttl}" if new_price_ttl is not None else "")
             )
-            await rpc_client.set_fee_per_cost()
+            try:
+                await rpc_client.set_fee_per_cost()
+            except Exception as err:
+                log.error("Failed to set fee_per_cost: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
+
             try:
                 response = await rpc_client.announcer_configure(
                     coin_name=announcer["name"],

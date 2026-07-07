@@ -97,7 +97,12 @@ async def run_stability_fee_transfer_bot():
         for vault in vaults:
             vault_name = vault["name"]
 
-            await rpc_client.set_fee_per_cost()
+            try:
+                await rpc_client.set_fee_per_cost()
+            except Exception as err:
+                log.error("Failed to set fee_per_cost: %s", err)
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
             # transfer SFs
             try:

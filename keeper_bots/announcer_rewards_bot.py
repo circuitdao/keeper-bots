@@ -70,7 +70,12 @@ async def run_announcer_rewards_bot():
 
     while True:
 
-        await rpc_client.set_fee_per_cost()
+        try:
+            await rpc_client.set_fee_per_cost()
+        except Exception as err:
+            log.error("Failed to set fee_per_cost: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
 
         # show announcer
         try:

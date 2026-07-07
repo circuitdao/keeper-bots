@@ -679,7 +679,14 @@ async def run_liquidation_bid_bot():
                     await asyncio.sleep(CONTINUE_DELAY)
                     continue
 
-            await rpc_client.set_fee_per_cost()
+            try:
+                await rpc_client.set_fee_per_cost()
+            except Exception as err:
+                log.error(
+                    "Failed to set fee_per_cost. %s: %s", type(err).__name__, err
+                )
+                await asyncio.sleep(CONTINUE_DELAY)
+                continue
 
             if time.monotonic() - last_okx_heartbeat >= HEARTBEAT_INTERVAL:
                 try:

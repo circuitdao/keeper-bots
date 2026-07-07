@@ -109,7 +109,12 @@ async def run_liquidation_start_bot():
     )
 
     while True:
-        await rpc_client.set_fee_per_cost()
+        try:
+            await rpc_client.set_fee_per_cost()
+        except Exception as err:
+            log.error("Failed to set fee_per_cost: %s", str(err))
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
 
         try:
             state = await rpc_client.upkeep_state(vaults=True)

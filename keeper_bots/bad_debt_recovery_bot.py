@@ -52,7 +52,12 @@ async def run_bad_debt_recovery_bot():
     log.info("Started bad debt recovery bot")
 
     while True:
-        await rpc_client.set_fee_per_cost()
+        try:
+            await rpc_client.set_fee_per_cost()
+        except Exception as err:
+            log.error("Failed to set fee_per_cost: %s", err)
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
 
         try:
             state = await rpc_client.upkeep_state(vaults=True)
