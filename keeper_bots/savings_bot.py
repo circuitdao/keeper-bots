@@ -54,6 +54,16 @@ async def run_savings_job():
 
     while True:
 
+        # resolve fee_per_cost (e.g. the "fast" preset) before submitting any
+        # transaction; otherwise self.fee_per_cost stays None and the API rejects
+        # the request with a fee_per_cost float_type error
+        try:
+            await rpc_client.set_fee_per_cost()
+        except Exception as err:
+            log.error("Failed to set fee_per_cost: %s", str(err))
+            await asyncio.sleep(CONTINUE_DELAY)
+            continue
+
         # get savings vault
         log.info("Getting savings vault")
         try:
