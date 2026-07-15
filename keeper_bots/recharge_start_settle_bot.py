@@ -150,7 +150,7 @@ async def run_recharge_start_settle_bot():
                     log.info("Starting Recharge Auction %s", c["name"])
 
                     try:
-                        await rpc_client.upkeep_recharge_start(COIN_NAME=c.name)
+                        await rpc_client.upkeep_recharge_start(c["name"])
                     except httpx.ReadTimeout as err:
                         log.error("Failed to start Recharge Auction due to ReadTimeout: %s", err)
                         continue
@@ -166,7 +166,7 @@ async def run_recharge_start_settle_bot():
                         break
 
             if not started:
-                log.error("Failed to start Recharge Auction on any of the %s Recharge Auction coins on stand-by", len([c for c in recharge_coins if c["statuts"] == "STANDBY"]))
+                log.error("Failed to start Recharge Auction on any of the %s Recharge Auction coins on stand-by", len([c for c in recharge_coins if c["status"] == "STANDBY"]))
                 await asyncio.sleep(CONTINUE_DELAY)
                 continue
             else:
