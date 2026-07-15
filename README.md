@@ -204,10 +204,6 @@ poetry run python -m keeper_bots.announcer_configure_bot --dry-run
 
 ### Supporting Utilities
 
-**recharge_bot**
-- General recharge operations
-- Usage: `python -m keeper_bots.recharge_bot`
-
 **stability_fee_transfer_bot**
 - Transfers stability fees
 - Usage: `python -m keeper_bots.stability_fee_transfer_bot`

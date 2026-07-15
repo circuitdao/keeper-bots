@@ -79,7 +79,6 @@ loggers:
   bad_debt_recovery_bot: *bot_logger_config
   liquidation_bid_bot: *bot_logger_config
   liquidation_start_bot: *bot_logger_config
-  recharge_bot: *bot_logger_config
   stability_fee_transfer_bot: *bot_logger_config
   treasury_rebalance_bot: *bot_logger_config
 root:
