@@ -186,6 +186,12 @@ poetry run python -m keeper_bots.announcer_configure_bot --dry-run
 - Optionally set `SURPLUS_BID_STARTING_CRT_PRICE` (CRT/BYC price, must be >= the min price) to open with an aggressive bid and speed the auction along
 - Usage: `python -m keeper_bots.surplus_bid_bot`
 
+**recharge_bid_bot**
+- Bids BYC for CRT in the first running, biddable recharge auction (the mirror image of the surplus bid bot: pays BYC for CRT and bids the price up rather than down)
+- Bids the minimum increment by default; optionally set `RECHARGE_BID_MAX_CRT_PRICE` (CRT/BYC price, ie BYC per CRT) to stop bidding once you would be paying more than that per CRT
+- Optionally set `RECHARGE_BID_STARTING_CRT_PRICE` (CRT/BYC price, must be <= the max price) to open with an aggressive bid and speed the auction along
+- Usage: `python -m keeper_bots.recharge_bid_bot`
+
 ### Treasury and Savings
 
 **treasury_rebalance_bot**

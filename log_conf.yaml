@@ -73,6 +73,7 @@ loggers:
   governance_veto_bot: *bot_logger_config
   governance_implement_bot: *bot_logger_config
   recharge_start_settle_bot: *bot_logger_config
+  recharge_bid_bot: *bot_logger_config
   savings_bot: *bot_logger_config
   surplus_start_settle_bot: *bot_logger_config
   # Add other bot loggers here as needed - they will all inherit the shared config

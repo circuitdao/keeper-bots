@@ -26,8 +26,8 @@ if os.path.exists("log_conf.yaml"):
 log = logging.getLogger("recharge_start_settle_bot")
 
 
-RUN_INTERVAL = 1 * 60
-CONTINUE_DELAY = 10
+RUN_INTERVAL = int(os.getenv("RECHARGE_START_SETTLE_RUN_INTERVAL", "60"))
+CONTINUE_DELAY = int(os.getenv("RECHARGE_START_SETTLE_CONTINUE_DELAY", "10"))
 
 
 async def run_recharge_start_settle_bot():
@@ -48,10 +48,9 @@ async def run_recharge_start_settle_bot():
     )
     parser.add_argument(
         "--settle-all",
-        action="store_true",
-        type=bool,
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Settle all recharge auctions, not just the ones we have won"
+        help="Settle all recharge auctions, not just the ones we have won",
     )
 
     args = parser.parse_args()
