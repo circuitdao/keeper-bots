@@ -160,6 +160,15 @@ def format_sig(value: float, sig: int = 3) -> str:
 async def run_surplus_bid_job() -> bool:
     """Run a single bid attempt. Returns True on error, False otherwise."""
 
+    # resolve fee_per_cost (e.g. the "fast" preset) before submitting any
+    # transaction; otherwise self.fee_per_cost stays None and the API rejects
+    # the bid with a fee_per_cost float_type error
+    try:
+        await rpc_client.set_fee_per_cost()
+    except Exception as err:
+        log.error("Failed to set fee_per_cost: %s", str(err))
+        return True
+
     # get surplus auction coins
     try:
         surplus_coins = await rpc_client.upkeep_surplus_list()
