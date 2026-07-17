@@ -55,7 +55,7 @@ if not TARGET_PUZZLE_HASH in [None, ""]:
 elif TARGET_PUZZLE_HASH == "":
     TARGET_PUZZLE_HASH = None
 
-rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
 
 
 async def run_announcer_rewards_bot():

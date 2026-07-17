@@ -133,7 +133,7 @@ if (
         "SURPLUS_BID_STARTING_CRT_PRICE must be >= SURPLUS_BID_MIN_CRT_PRICE"
     )
 
-rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
 
 # Puzzle hashes controlled by us, used to detect when we are already the leading bidder.
 my_puzzle_hashes = {

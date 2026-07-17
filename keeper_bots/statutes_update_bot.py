@@ -65,7 +65,7 @@ async def run_statutes():
     if not args.private_key:
         raise ValueError("No private key provided")
 
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, fee_per_cost=args.fee_per_cost)
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, args.add_sig_data, fee_per_cost=args.fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
     while True:
         # Update Statutes price
         log.info("Updating Statutes Price")

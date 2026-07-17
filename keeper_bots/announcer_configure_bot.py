@@ -63,7 +63,7 @@ if not rpc_url:
 if not private_key:
     raise ValueError("No master private key found")
 
-rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
 
 
 async def run_announcer():
