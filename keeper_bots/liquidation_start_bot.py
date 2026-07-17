@@ -60,7 +60,7 @@ if INITIATOR_PUZZLE_HASH not in [None, ""]:
         )
         raise
 
-rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
 
 
 async def start_liquidation(vault_name, initiator_puzzle_hash, rpc_client):

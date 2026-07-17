@@ -45,7 +45,7 @@ if not private_key:
     log.error("No master private key found")
     raise ValueError("No master private key found")
 
-rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
 
 
 async def run_bad_debt_recovery_bot():

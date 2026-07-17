@@ -52,7 +52,7 @@ if not private_key:
 
 
 async def run_stability_fee_transfer_bot():
-    rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+    rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
 
     while True:
         # get vaults

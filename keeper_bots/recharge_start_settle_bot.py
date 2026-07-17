@@ -58,7 +58,7 @@ async def run_recharge_start_settle_bot():
     if not args.private_key:
         raise ValueError("No private key provided")
 
-    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key)
+    rpc_client = CircuitRPCClient(args.rpc_url, args.private_key, key_count=int(os.getenv("KEY_COUNT", "500")))
 
     while True:
 

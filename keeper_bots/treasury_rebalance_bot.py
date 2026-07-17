@@ -37,7 +37,7 @@ async def run_bot():
         "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
     args = parser.parse_args()
-    rpc_client = CircuitRPCClient(args.base_url, args.private_key)
+    rpc_client = CircuitRPCClient(args.base_url, args.private_key, key_count=int(os.getenv("KEY_COUNT", "500")))
 
     while True:
 

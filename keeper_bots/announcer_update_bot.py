@@ -74,7 +74,7 @@ async def run_announcer():
     UPDATE_THRESHOLD_BPS_ADJ = UPDATE_THRESHOLD_BPS # setting default value
     log.info("Set default adjusted update threshold [bps]: %s", UPDATE_THRESHOLD_BPS_ADJ)
 
-    rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost)
+    rpc_client = CircuitRPCClient(rpc_url, private_key, add_sig_data, fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500")))
     if "testnet" in rpc_url or "localhost" in rpc_url:
         sym = "XRP-USDT"
         sym_gate = "XRP_USDT"  # Gate.io uses underscore

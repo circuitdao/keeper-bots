@@ -82,7 +82,7 @@ async def run_surplus_start_settle_bot():
         raise ValueError("No private key provided")
 
     rpc_client = CircuitRPCClient(
-        args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost
+        args.rpc_url, args.private_key, args.add_sig_data, args.fee_per_cost, key_count=int(os.getenv("KEY_COUNT", "500"))
     )
 
     while True:
